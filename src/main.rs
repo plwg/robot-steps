@@ -268,6 +268,14 @@ fn draw_mystery(c: Vec2, cell: f32, scale: f32, time: f32) {
     let s = cell * scale;
     let c = c + vec2(0.0, (time * 2.5).sin() * cell * 0.03);
     draw_ellipse(c.x, c.y + cell * 0.36, s * 0.3, s * 0.07, 0.0, SHADOW);
+    draw_puff(c, s);
+    if scale > 0.3 {
+        draw_question(c, 64.0 * s / MAX_CELL, CHECK_SLATE);
+    }
+}
+
+/// A puffy cloud `s` across, shaded underneath.
+fn draw_puff(c: Vec2, s: f32) {
     let shade = darker(CLOUD, 0.88);
     for (dx, dy, r) in [(-0.2, 0.06, 0.17), (0.2, 0.06, 0.17), (0.0, 0.1, 0.2)] {
         draw_circle(c.x + dx * s, c.y + dy * s + s * 0.03, r * s, shade);
@@ -280,9 +288,6 @@ fn draw_mystery(c: Vec2, cell: f32, scale: f32, time: f32) {
         (0.0, 0.08, 0.2),
     ] {
         draw_circle(c.x + dx * s, c.y + dy * s, r * s, CLOUD);
-    }
-    if scale > 0.3 {
-        draw_question(c, 64.0 * s / MAX_CELL, CHECK_SLATE);
     }
 }
 
@@ -1686,6 +1691,8 @@ impl Game {
 
     /// Three cards, one per player, each with its own robot and progress.
     fn draw_players(&self) {
+        self.draw_scenery();
+        draw_title(vec2(W / 2.0, 92.0), self.time);
         let total = self.levels.len();
         for (slot, &paint) in PAINTS.iter().enumerate() {
             let mut r = player_card(slot);
@@ -1734,6 +1741,77 @@ impl Game {
                 draw_trash_icon(c, size);
             }
         }
+    }
+
+    /// The players screen's backdrop: a sun, drifting clouds, hills with
+    /// trees, and a robot hopping along the grass collecting stars.
+    fn draw_scenery(&self) {
+        let t = self.time;
+        let sun = vec2(96.0, 92.0);
+        for i in 0..12 {
+            let a = t * 0.3 + i as f32 * PI / 6.0;
+            let d = vec2(a.cos(), a.sin());
+            let (a, b) = (sun + d * 62.0, sun + d * 82.0);
+            draw_line(a.x, a.y, b.x, b.y, 8.0, STAR);
+        }
+        draw_circle(sun.x, sun.y, 52.0, STAR);
+        draw_circle(
+            sun.x - 14.0,
+            sun.y - 14.0,
+            18.0,
+            Color::new(1.0, 0.9, 0.45, 1.0),
+        );
+
+        for (i, (y, size, speed)) in [(60.0, 150.0, 14.0), (150.0, 110.0, 22.0), (40.0, 90.0, 9.0)]
+            .into_iter()
+            .enumerate()
+        {
+            let span = W + size * 2.0;
+            let x = (i as f32 * 520.0 + t * speed) % span - size;
+            draw_puff(vec2(x, y), size);
+        }
+
+        for (x, r) in [
+            (-60.0, 300.0),
+            (420.0, 380.0),
+            (980.0, 340.0),
+            (1460.0, 300.0),
+        ] {
+            draw_circle(x, 660.0 + r * 0.55, r, GRASS_DARK);
+        }
+        for (x, size) in [
+            (60.0, 120.0),
+            (140.0, 90.0),
+            (1300.0, 100.0),
+            (1370.0, 130.0),
+        ] {
+            draw_tree(vec2(x, 560.0 + (130.0 - size) * 0.4), size, 1.0, 0.0);
+        }
+        draw_rectangle(0.0, 690.0, W, H - 690.0, GRASS);
+
+        // The robot hops along the bottom, picking up the stars as it goes;
+        // each trip across it's the next player's robot.
+        let lap_time = 16.0;
+        let lap = (t / lap_time) as usize;
+        let x = (t % lap_time) / lap_time * (W + 160.0) - 80.0;
+        let ground = 745.0;
+        for i in 0..9 {
+            let sx = 150.0 + i as f32 * 140.0;
+            if sx > x {
+                let spin = (t * 1.5 + i as f32).sin() * 0.2;
+                draw_star(vec2(sx, ground - 10.0), 18.0, spin, STAR);
+            }
+        }
+        let hop = (t * PI / STEP_TIME).sin().abs() * 16.0;
+        draw_robot(
+            vec2(x, ground - 28.0 - hop),
+            80.0,
+            Face::Happy,
+            vec2(1.0, 0.0),
+            t,
+            hop,
+            PAINTS[lap % PAINTS.len()],
+        );
     }
 
     /// The level map: a winding path, finished levels starred, and this
@@ -2397,6 +2475,66 @@ fn player_card(slot: usize) -> Rect {
 fn erase_button(slot: usize) -> Vec2 {
     let r = player_card(slot);
     vec2(r.right() - 44.0, r.bottom() - 44.0)
+}
+
+/// The game's name in big, bold, bouncing letters, each its own colour.
+fn draw_title(centre: Vec2, time: f32) {
+    const TITLE: &str = "ROBOT STEPS";
+    const SIZE: f32 = 110.0;
+    let colours = [
+        STOP_RED,
+        UNDO_YELLOW,
+        PLAY_GREEN,
+        REPEAT_TEAL,
+        FN_COLOURS[0],
+        WHITE,
+        IF_LIME,
+        FN_COLOURS[1],
+        STOP_RED,
+        UNDO_YELLOW,
+        PLAY_GREEN,
+    ];
+    let scale = (screen_width() / W).min(screen_height() / H) * screen_dpi_scale();
+    let width =
+        |text: &str| measure_text(text, None, (SIZE * scale).round() as u16, 1.0 / scale).width;
+    let spacing = 6.0;
+    let total = width(TITLE) + spacing * (TITLE.len() - 1) as f32;
+    let mut x = centre.x - total / 2.0;
+    for (i, (ch, colour)) in TITLE.chars().zip(colours).enumerate() {
+        let text = ch.to_string();
+        let w = width(&text);
+        let bob = (time * 3.0 - i as f32 * 0.5).sin() * 6.0;
+        let c = vec2(x + w / 2.0, centre.y + bob);
+        if ch != ' ' {
+            draw_label(&text, c + vec2(0.0, 8.0), SIZE, SHADOW);
+            // A thick outline, then the letter drawn a little bold.
+            for k in 0..16 {
+                let a = k as f32 * PI / 8.0;
+                for r in [3.5, 7.0] {
+                    draw_label(&text, c + vec2(a.cos(), a.sin()) * r, SIZE, INK);
+                }
+            }
+            for (dx, dy) in [(-1.5, 0.0), (1.5, 0.0), (0.0, -1.5), (0.0, 1.5)] {
+                draw_label(&text, c + vec2(dx, dy), SIZE, colour);
+            }
+        }
+        x += w + spacing;
+    }
+    // Stars twinkling around the title.
+    let half = total / 2.0;
+    for (i, (dx, dy, r)) in [
+        (-half - 50.0, -30.0, 22.0),
+        (half + 50.0, -24.0, 24.0),
+        (-half - 22.0, 34.0, 13.0),
+        (half + 28.0, 38.0, 14.0),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let twinkle = 0.75 + (time * 4.0 + i as f32 * 1.7).sin() * 0.25;
+        let c = centre + vec2(dx, dy);
+        draw_star(c, r * twinkle, time * 0.8 + i as f32, STAR);
+    }
 }
 
 /// A little map: three linked dots.
