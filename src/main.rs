@@ -938,6 +938,8 @@ struct Game {
     /// How the last win went: blocks and turns, and whether each was a new
     /// best.
     result: Option<(usize, usize, bool, bool)>,
+    /// The trophy was tapped: show the level's best blocks and turns.
+    show_best: bool,
 }
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -1072,6 +1074,7 @@ impl Game {
             if_not: false,
             best: progress::Best::new(),
             result: None,
+            show_best: false,
         };
         game.load(idx);
         game.count_finished();
@@ -1115,6 +1118,11 @@ impl Game {
         self.solved = progress::load(slot, &self.keys);
         self.best = progress::load_best(slot);
         self.open_map();
+    }
+
+    /// Has this level been won (so it has a best to show)?
+    fn has_best(&self) -> bool {
+        self.custom.is_none() && self.best.contains_key(&self.level().key())
     }
 
     /// A win: keep the player's best blocks and turns. (The first time is
@@ -1172,6 +1180,7 @@ impl Game {
         self.idx = idx;
         self.custom = None;
         self.result = None;
+        self.show_best = false;
         self.start_level();
     }
 
@@ -1987,6 +1996,11 @@ impl Game {
         if self.click_slider(m) {
             return;
         }
+        if self.has_best() && (m - TROPHY).length() <= 26.0 {
+            self.sfx(Sfx::Tap);
+            self.show_best = !self.show_best;
+            return;
+        }
         for (button, centre, half) in self.buttons() {
             if self.visible(button) && (m - centre).abs().max_element() <= half {
                 if self.mode == Mode::Win && !matches!(button, Button::Fullscreen | Button::Sound) {
@@ -2555,11 +2569,27 @@ impl Game {
             maker::draw_pencil_icon(c, 15.0, WHITE);
         } else {
             draw_level_label(self.level(), c, 30.0, WHITE);
-            // Once it's been won: the fewest blocks and the fewest turns so
-            // far, to beat.
-            if let Some(&(blocks, turns)) = self.best.get(&self.level().key()) {
-                draw_trophy(c + vec2(60.0, 0.0), 30.0, STAR);
-                let block = c + vec2(102.0, 0.0);
+            // Once it's been won, a trophy. Tapped, it shows the fewest
+            // blocks and the fewest turns so far, to beat.
+            if self.has_best() {
+                let r = if (self.mouse - TROPHY).length() <= 26.0 {
+                    24.0
+                } else {
+                    22.0
+                };
+                let back = if self.show_best { STAR } else { PANEL };
+                draw_circle(TROPHY.x, TROPHY.y, r, back);
+                let cup = if self.show_best {
+                    WHITE
+                } else {
+                    darker(STAR, 0.85)
+                };
+                draw_trophy(TROPHY, 30.0, cup);
+            }
+            if let Some(&(blocks, turns)) = self.best.get(&self.level().key())
+                && self.show_best
+            {
+                let block = TROPHY + vec2(46.0, 0.0);
                 rounded_rect(block.x - 13.0, block.y - 13.0, 26.0, 26.0, 6.0, PLAY_GREEN);
                 draw_arrow(block, 18.0, Dir::Right, WHITE);
                 draw_label_left(&blocks.to_string(), block + vec2(20.0, 0.0), 26.0, INK);
@@ -3613,6 +3643,9 @@ enum SimEnd {
 
 /// The sound on/off button, next to the full screen one on every screen.
 const SOUND_BUTTON: Vec2 = vec2(1334.0, 36.0);
+
+/// The trophy next to the level's number, once it's been won.
+const TROPHY: Vec2 = vec2(178.0, 36.0);
 
 /// The size of the eraser that appears on a program block under the pointer.
 const ERASER_R: f32 = 14.0;
