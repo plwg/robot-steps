@@ -66,6 +66,63 @@ pub struct Block {
     pub times: u8,
 }
 
+/// One slot in the program: a block, or one end of a loop. Blocks between a
+/// `LoopStart` and the next `LoopEnd` (or the end of the program, if the
+/// loop is still open) run `times` times over.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Item {
+    Block(Block),
+    LoopStart { times: u8 },
+    LoopEnd,
+}
+
+/// One action in a running program, with what to show while it happens.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Exec {
+    pub cmd: Cmd,
+    /// Which program slot this came from.
+    pub item: usize,
+    /// How many runs of that block are left, counting this one.
+    pub left: u8,
+    /// The loop this is inside (its `LoopStart` slot), and runs of it left.
+    pub in_loop: Option<(usize, u8)>,
+}
+
+/// Unroll a program into the actions it performs, in order.
+pub fn expand(items: &[Item]) -> Vec<Exec> {
+    let mut out = Vec::new();
+    let block_runs = |out: &mut Vec<Exec>, i: usize, in_loop| {
+        if let Item::Block(b) = items[i] {
+            for r in 0..b.times {
+                out.push(Exec {
+                    cmd: b.cmd,
+                    item: i,
+                    left: b.times - r,
+                    in_loop,
+                });
+            }
+        }
+    };
+    let mut i = 0;
+    while i < items.len() {
+        if let Item::LoopStart { times } = items[i] {
+            let end = (i + 1..items.len())
+                .find(|&j| items[j] == Item::LoopEnd)
+                .unwrap_or(items.len());
+            for k in 0..times {
+                for j in i + 1..end {
+                    block_runs(&mut out, j, Some((i, times - k)));
+                }
+            }
+            i = end + 1;
+        } else {
+            block_runs(&mut out, i, None);
+            i += 1;
+        }
+    }
+    out
+}
+
 pub struct LevelDef {
     /// Legend: `.` grass, `#` tree, `@` rock, `?` mystery (tree or grass),
     /// `R` robot start, `*` star.
@@ -75,6 +132,7 @@ pub struct LevelDef {
     chop: bool,
     repeat: bool,
     check: bool,
+    loops: bool,
 }
 
 const fn level(map: &'static [&'static str]) -> LevelDef {
@@ -84,6 +142,7 @@ const fn level(map: &'static [&'static str]) -> LevelDef {
         chop: false,
         repeat: false,
         check: false,
+        loops: false,
     }
 }
 
@@ -99,6 +158,13 @@ impl LevelDef {
         self.repeat = true;
         self.slots = slots;
         self
+    }
+
+    /// Unlock loops (and repeat, which sets how many times a loop runs), and
+    /// limit the program to `slots`, so a loop is the only way to fit.
+    const fn with_loops(mut self, slots: usize) -> Self {
+        self.loops = true;
+        self.with_repeat(slots)
     }
 
     /// Unlock the "if tree, chop" block (and the axe).
@@ -174,6 +240,18 @@ pub const LEVELS: &[LevelDef] = &[
     level(&["R..?..#..", "@@@@@@@@.", "*..?..?.."])
         .with_check()
         .with_repeat(14),
+    // --- Loops: repeat a whole group of blocks ---
+    level(&[
+        "R.@@@@@", "@..@@@@", "@@..@@@", "@@@..@@", "@@@@..@", "@@@@@.*",
+    ])
+    .with_loops(5),
+    level(&["R..@@@@@@", "@@...@@@@", "@@@@...@@", "@@@@@@..*"]).with_loops(5),
+    level(&["...@...@..*", ".@.@.@.@.@@", "R@...@...@@"]).with_loops(8),
+    level(&["R#.#.#.#*"]).with_axe().with_loops(4),
+    level(&["R????*"]).with_check().with_loops(4),
+    level(&["R?@@@@", "@.?@@@", "@@.?@@", "@@@.?@", "@@@@.*"])
+        .with_check()
+        .with_loops(6),
 ];
 
 pub struct Level {
@@ -186,6 +264,7 @@ pub struct Level {
     pub chop: bool,
     pub repeat: bool,
     pub check: bool,
+    pub loops: bool,
     /// Where the mystery clouds are.
     pub mysteries: Vec<Pos>,
 }
@@ -228,6 +307,7 @@ impl Level {
             chop: def.chop,
             repeat: def.repeat,
             check: def.check,
+            loops: def.loops,
             mysteries,
         }
     }
@@ -340,6 +420,134 @@ mod tests {
     use super::*;
     use std::collections::{HashSet, VecDeque};
 
+    /// Known solutions for the loop levels (too many loop programs to search).
+    /// `R` move right, `cR` chop right, `?R` check right, a number repeats a
+    /// block, `[` opens a loop and `]4` closes it, running it 4 times.
+    const LOOP_SOLUTIONS: &[(usize, &str)] = &[
+        (35, "[ R D ]5 R"),
+        (36, "[ R2 D ]3 R2"),
+        (37, "[ U2 R2 D2 R2 ]2 U2 R2"),
+        (38, "[ cR R2 ]4"),
+        (39, "[ ?R R ]5"),
+        (40, "[ ?R R D ]4 R"),
+    ];
+
+    fn parse_program(text: &str) -> Vec<Item> {
+        let dir = |c: char| match c {
+            'U' => Dir::Up,
+            'D' => Dir::Down,
+            'L' => Dir::Left,
+            'R' => Dir::Right,
+            _ => panic!("bad direction {c}"),
+        };
+        let mut items = Vec::new();
+        let mut open = None;
+        for token in text.split_whitespace() {
+            let digits = token.trim_start_matches(|c: char| !c.is_ascii_digit());
+            let times: u8 = digits.parse().unwrap_or(1);
+            let head = &token[..token.len() - digits.len()];
+            let mut chars = head.chars();
+            let item = match (chars.next(), chars.next()) {
+                (Some('['), None) => {
+                    open = Some(items.len());
+                    Item::LoopStart { times: 1 }
+                }
+                (Some(']'), None) => {
+                    items[open.take().expect("] without [")] = Item::LoopStart { times };
+                    Item::LoopEnd
+                }
+                (Some('c'), Some(d)) => Item::Block(Block {
+                    cmd: Cmd::Chop(dir(d)),
+                    times,
+                }),
+                (Some('?'), Some(d)) => Item::Block(Block {
+                    cmd: Cmd::IfTreeChop(dir(d)),
+                    times,
+                }),
+                (Some(d), None) => Item::Block(Block {
+                    cmd: Cmd::Move(dir(d)),
+                    times,
+                }),
+                _ => panic!("bad token {token}"),
+            };
+            items.push(item);
+        }
+        items
+    }
+
+    /// Does this program win however the mysteries turn out?
+    fn always_wins(level: &Level, program: &[Item]) -> bool {
+        let trace = expand(program);
+        level.outcomes().iter().all(|outcome| {
+            let mut world = level.revealed(outcome);
+            for exec in &trace {
+                if world.act(exec.cmd).is_err() {
+                    return false;
+                }
+                if world.stars.is_empty() {
+                    return true;
+                }
+            }
+            false
+        })
+    }
+
+    #[test]
+    fn loop_levels_have_a_solution_that_fits() {
+        let levels = all_levels();
+        let loop_levels: Vec<usize> = (1..=levels.len())
+            .filter(|&n| levels[n - 1].loops)
+            .collect();
+        let solved: Vec<usize> = LOOP_SOLUTIONS.iter().map(|&(n, _)| n).collect();
+        assert_eq!(loop_levels, solved, "every loop level needs a solution");
+        for &(n, text) in LOOP_SOLUTIONS {
+            let level = &levels[n - 1];
+            let program = parse_program(text);
+            assert!(program.len() <= level.slots, "level {n} solution too long");
+            assert!(always_wins(level, &program), "level {n} solution fails");
+        }
+    }
+
+    #[test]
+    fn loop_levels_need_a_loop() {
+        for (i, level) in all_levels().iter().enumerate() {
+            if level.loops {
+                let without = fewest_blocks(level, Allow::level(level)).unwrap_or(usize::MAX);
+                assert!(
+                    without > level.slots,
+                    "level {} fits in {without} blocks without a loop",
+                    i + 1
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn loops_unroll_in_order() {
+        let trace = expand(&parse_program("U [ R2 D ]2 L"));
+        let cmds: Vec<String> = trace.iter().map(|e| format!("{:?}", e.cmd)).collect();
+        assert_eq!(
+            cmds,
+            [
+                "Move(Up)",
+                "Move(Right)",
+                "Move(Right)",
+                "Move(Down)",
+                "Move(Right)",
+                "Move(Right)",
+                "Move(Down)",
+                "Move(Left)"
+            ]
+        );
+        assert_eq!(trace[1].in_loop, Some((1, 2)));
+        assert_eq!(trace[4].in_loop, Some((1, 1)));
+        assert_eq!(trace[4].left, 2);
+        // An unclosed loop runs to the end of the program.
+        assert_eq!(expand(&parse_program("[ R ]3")).len(), 3);
+        let open = &parse_program("[ R ]3")[..2];
+        assert_eq!(expand(open).len(), 3);
+    }
+
     struct Allow {
         repeat: bool,
         chop: bool,
@@ -418,7 +626,11 @@ mod tests {
             let blocks = fewest_blocks(level, Allow::level(level))
                 .unwrap_or_else(|| panic!("level {n} cannot be solved"));
             println!("level {n}: {blocks} blocks, {} slots", level.slots);
-            assert!(blocks <= level.slots, "level {n} needs {blocks} blocks");
+            // Loop levels only fit with a loop; their known solutions are
+            // checked in `loop_levels_have_a_solution_that_fits`.
+            if !level.loops {
+                assert!(blocks <= level.slots, "level {n} needs {blocks} blocks");
+            }
         }
     }
 

@@ -5,7 +5,7 @@ mod level;
 
 use std::f32::consts::PI;
 
-use level::{Block, Cmd, Dir, Event, Level, MAX_TIMES, Pos, Tile, World};
+use level::{Block, Cmd, Dir, Event, Exec, Item, Level, MAX_TIMES, Pos, Tile, World};
 use macroquad::prelude::*;
 use macroquad::rand::gen_range;
 
@@ -48,6 +48,7 @@ const UNDO_YELLOW: Color = Color::new(0.95, 0.7, 0.1, 1.0);
 const AXE_BROWN: Color = Color::new(0.62, 0.4, 0.22, 1.0);
 const REPEAT_TEAL: Color = Color::new(0.1, 0.65, 0.65, 1.0);
 const CHECK_SLATE: Color = Color::new(0.33, 0.36, 0.55, 1.0);
+const LOOP_BAND: Color = Color::new(0.72, 0.9, 0.9, 1.0);
 const CLOUD: Color = Color::new(0.97, 0.97, 1.0, 1.0);
 const WOOD: Color = Color::new(0.55, 0.35, 0.2, 1.0);
 const LEAF: Color = Color::new(0.16, 0.55, 0.22, 1.0);
@@ -309,6 +310,18 @@ fn draw_axe(c: Vec2, size: f32, dir: Dir, swing: f32, handle: Color) {
     );
 }
 
+/// A square bracket filling part of `r`: `[` if `open`, otherwise `]`.
+fn draw_bracket(r: Rect, x: f32, open: bool, color: Color) {
+    let t = r.w * 0.11;
+    let (top, bottom) = (r.y + r.h * 0.18, r.y + r.h * 0.82);
+    let serif = if open { r.w * 0.2 } else { -r.w * 0.2 };
+    draw_rectangle(x - t / 2.0, top, t, bottom - top, color);
+    for y in [top, bottom - t] {
+        let (x0, x1) = (x - t / 2.0, x + serif);
+        draw_rectangle(x0.min(x1), y, (x1 - x0).abs() + t / 2.0, t, color);
+    }
+}
+
 /// A circular "loop" arrow.
 fn draw_loop_icon(c: Vec2, r: f32, color: Color) {
     let rr = r * 0.55;
@@ -487,6 +500,7 @@ enum Button {
     Axe,
     Check,
     Repeat,
+    Loop,
     Play,
     Undo,
     Clear,
@@ -544,15 +558,15 @@ struct Game {
     levels: Vec<Level>,
     idx: usize,
     solved: Vec<bool>,
-    program: Vec<Block>,
+    program: Vec<Item>,
     /// The axe or check button was tapped; the next arrow makes that block.
     armed: Option<Button>,
     world: World,
     mode: Mode,
     timer: f32,
-    /// Which block is running, and which repetition of it.
-    step: usize,
-    rep: u8,
+    /// The program unrolled into single actions, and which one is running.
+    trace: Vec<Exec>,
+    pc: usize,
     /// What the robot is doing right now, for animation.
     event: Option<Event>,
     facing: Dir,
@@ -577,8 +591,8 @@ impl Game {
             world,
             mode: Mode::Edit,
             timer: 0.0,
-            step: 0,
-            rep: 0,
+            trace: Vec::new(),
+            pc: 0,
             event: None,
             facing: Dir::Right,
             failed_step: None,
@@ -610,8 +624,7 @@ impl Game {
         self.world = self.level().world();
         self.facing = Dir::Right;
         self.event = None;
-        self.step = 0;
-        self.rep = 0;
+        self.pc = 0;
         self.set_mode(Mode::Edit);
     }
 
@@ -631,11 +644,68 @@ impl Game {
         self.program.len() < self.level().slots
     }
 
+    fn has_blocks(&self) -> bool {
+        self.program.iter().any(|i| matches!(i, Item::Block(_)))
+    }
+
+    /// The start of a loop that hasn't been closed yet.
+    fn open_loop(&self) -> Option<usize> {
+        let start = self
+            .program
+            .iter()
+            .rposition(|i| matches!(i, Item::LoopStart { .. }))?;
+        let closed = self.program[start..].contains(&Item::LoopEnd);
+        (!closed).then_some(start)
+    }
+
+    /// The two ends of the loop that slot `i` belongs to, if it's a loop end.
+    fn loop_ends(&self, i: usize) -> Option<(usize, Option<usize>)> {
+        let start = match self.program[i] {
+            Item::LoopStart { .. } => i,
+            Item::LoopEnd => self.program[..i]
+                .iter()
+                .rposition(|it| matches!(it, Item::LoopStart { .. }))?,
+            Item::Block(_) => return None,
+        };
+        let end = (start + 1..self.program.len()).find(|&j| self.program[j] == Item::LoopEnd);
+        Some((start, end))
+    }
+
+    /// How many times the last thing in the program runs: the last block, or
+    /// the whole loop if the program ends with one.
+    fn last_times(&mut self) -> Option<(&mut u8, u8)> {
+        let last = self.program.len().checked_sub(1)?;
+        let (start, _) = self.loop_ends(last).unwrap_or((last, None));
+        match &mut self.program[start] {
+            Item::Block(b) => Some((&mut b.times, 1)),
+            // Looping once isn't a loop, so loops go from 2.
+            Item::LoopStart { times } => Some((times, 2)),
+            Item::LoopEnd => None,
+        }
+    }
+
+    /// What tapping repeat would change the last count to.
+    fn next_times(&self) -> u8 {
+        let last = self.program.len().wrapping_sub(1);
+        let (start, _) = self
+            .program
+            .get(last)
+            .and_then(|_| self.loop_ends(last))
+            .unwrap_or((last, None));
+        match self.program.get(start) {
+            Some(Item::Block(b)) => b.times % MAX_TIMES + 1,
+            Some(Item::LoopStart { times }) if *times >= MAX_TIMES => 2,
+            Some(Item::LoopStart { times }) => times + 1,
+            _ => 2,
+        }
+    }
+
     fn visible(&self, button: Button) -> bool {
         match button {
             Button::Axe => self.level().chop,
             Button::Check => self.level().check,
             Button::Repeat => self.level().repeat,
+            Button::Loop => self.level().loops,
             _ => true,
         }
     }
@@ -644,9 +714,10 @@ impl Game {
         let editing = self.mode == Mode::Edit;
         match button {
             Button::Arrow(_) | Button::Axe | Button::Check => editing && self.has_room(),
+            Button::Loop => editing && (self.has_room() || self.open_loop().is_some()),
             Button::Repeat | Button::Clear => editing && !self.program.is_empty(),
             Button::Undo => editing && (self.armed.is_some() || !self.program.is_empty()),
-            Button::Play => self.running() || (editing && !self.program.is_empty()),
+            Button::Play => self.running() || (editing && self.has_blocks()),
             Button::Fullscreen => true,
         }
     }
@@ -666,16 +737,26 @@ impl Game {
                     Some(Button::Check) => Cmd::IfTreeChop(dir),
                     _ => Cmd::Move(dir),
                 };
-                self.program.push(Block { cmd, times: 1 });
+                self.program.push(Item::Block(Block { cmd, times: 1 }));
             }
             Button::Axe | Button::Check => {
                 self.armed = (self.armed != Some(button)).then_some(button);
             }
             Button::Repeat => {
-                if let Some(last) = self.program.last_mut() {
-                    last.times = last.times % MAX_TIMES + 1;
+                let next = self.next_times();
+                if let Some((times, _)) = self.last_times() {
+                    *times = next;
                 }
             }
+            Button::Loop => match self.open_loop() {
+                // Tapped again straight away: never mind.
+                Some(start) if start + 1 == self.program.len() => {
+                    self.program.pop();
+                }
+                Some(_) if self.has_room() => self.program.push(Item::LoopEnd),
+                Some(_) => {}
+                None => self.program.push(Item::LoopStart { times: 2 }),
+            },
             Button::Undo if self.armed.is_some() => self.armed = None,
             Button::Undo => {
                 self.program.pop();
@@ -688,6 +769,7 @@ impl Game {
             Button::Play => {
                 self.armed = None;
                 self.reset_robot();
+                self.trace = level::expand(&self.program);
                 self.start_run();
             }
             Button::Fullscreen => {
@@ -714,15 +796,15 @@ impl Game {
         self.set_mode(Mode::Reveal);
     }
 
-    /// Start the current repetition of the current block.
+    /// Start the next action of the program.
     fn act(&mut self) {
-        let Some(block) = self.program.get(self.step).copied() else {
+        let Some(exec) = self.trace.get(self.pc).copied() else {
             // Ran out of blocks with stars still left.
             self.set_mode(Mode::Sad);
             return;
         };
-        self.facing = block.cmd.dir();
-        match self.world.act(block.cmd) {
+        self.facing = exec.cmd.dir();
+        match self.world.act(exec.cmd) {
             Ok(event) => {
                 self.event = Some(event);
                 self.set_mode(match event {
@@ -732,7 +814,7 @@ impl Game {
                 });
             }
             Err(()) => {
-                self.failed_step = Some(self.step);
+                self.failed_step = Some(exec.item);
                 self.set_mode(Mode::Bump);
             }
         }
@@ -764,11 +846,7 @@ impl Game {
             self.confetti();
             return;
         }
-        self.rep += 1;
-        if self.rep >= self.program[self.step].times {
-            self.step += 1;
-            self.rep = 0;
-        }
+        self.pc += 1;
         self.act();
     }
 
@@ -812,11 +890,22 @@ impl Game {
             }
             return;
         }
-        // Tap a block in the program to take it out.
+        // Tap a block in the program to take it out. Tapping either end of a
+        // loop takes out the loop but keeps the blocks inside.
         if self.mode == Mode::Edit
             && let Some(i) = (0..self.program.len()).find(|&i| self.slot_rect(i).contains(m))
         {
-            self.program.remove(i);
+            match self.loop_ends(i) {
+                Some((start, end)) => {
+                    if let Some(end) = end {
+                        self.program.remove(end);
+                    }
+                    self.program.remove(start);
+                }
+                None => {
+                    self.program.remove(i);
+                }
+            }
             self.failed_step = None;
             return;
         }
@@ -848,6 +937,7 @@ impl Game {
             (KeyCode::C, Button::Axe),
             (KeyCode::Q, Button::Check),
             (KeyCode::R, Button::Repeat),
+            (KeyCode::L, Button::Loop),
             (KeyCode::Space, Button::Play),
             (KeyCode::Enter, Button::Play),
             (KeyCode::Backspace, Button::Undo),
@@ -858,14 +948,14 @@ impl Game {
                 self.press(button);
             }
         }
-        // Number keys set how many times the last block repeats.
+        // Number keys set how many times the last block (or loop) repeats.
         if let Some(n) = typed.and_then(|ch| ch.to_digit(10))
             && n >= 1
             && self.visible(Button::Repeat)
             && self.enabled(Button::Repeat)
-            && let Some(last) = self.program.last_mut()
+            && let Some((times, min)) = self.last_times()
         {
-            last.times = n as u8;
+            *times = (n as u8).max(min);
         }
     }
 
@@ -873,15 +963,17 @@ impl Game {
 
     /// Every button for this level, with its centre and half-size.
     fn buttons(&self) -> Vec<(Button, Vec2, f32)> {
-        let tools: Vec<Button> = [Button::Axe, Button::Check, Button::Repeat]
+        let tools: Vec<Button> = [Button::Axe, Button::Check, Button::Repeat, Button::Loop]
             .into_iter()
             .filter(|&b| self.visible(b))
             .collect();
         let middle = (tools.len() as f32 - 1.0) / 2.0;
-        let tool_buttons = tools
-            .into_iter()
-            .enumerate()
-            .map(|(i, b)| (b, vec2(1256.0 + (i as f32 - middle) * 92.0, 412.0), 40.0));
+        let spacing = (272.0 / tools.len() as f32).min(92.0);
+        let half = (spacing * 0.45).min(40.0);
+        let tool_buttons = tools.into_iter().enumerate().map(move |(i, b)| {
+            let x = 1256.0 + (i as f32 - middle) * spacing;
+            (b, vec2(x, 412.0), half)
+        });
         BUTTONS.into_iter().chain(tool_buttons).collect()
     }
 
@@ -1151,7 +1243,15 @@ impl Game {
             && self
                 .failed_step
                 .and_then(|i| self.program.get(i))
-                .is_some_and(|b| matches!(b.cmd, Cmd::Chop(_)));
+                .is_some_and(|it| {
+                    matches!(
+                        it,
+                        Item::Block(Block {
+                            cmd: Cmd::Chop(_),
+                            ..
+                        })
+                    )
+                });
         if self.mode == Mode::Chopping || failed_chop {
             let swing = (self.time * 25.0).sin() * 0.5;
             draw_axe(
@@ -1172,13 +1272,27 @@ impl Game {
         }
     }
 
-    fn draw_block(r: Rect, block: Block, colour: Color, badge: Option<u8>) {
+    fn item_colour(item: Item) -> Color {
+        match item {
+            Item::Block(b) => Self::block_colour(b.cmd),
+            Item::LoopStart { .. } | Item::LoopEnd => REPEAT_TEAL,
+        }
+    }
+
+    fn draw_item(r: Rect, item: Item, colour: Color, badge: Option<u8>) {
         rounded_rect(r.x, r.y + 4.0, r.w, r.h, 12.0, darker(colour, 0.7));
         rounded_rect(r.x, r.y, r.w, r.h, 12.0, colour);
-        match block.cmd {
-            Cmd::Move(dir) => draw_arrow(r.center(), r.w * 0.8, dir, WHITE),
-            Cmd::Chop(dir) => draw_chop_icon(r.center(), r.w, dir),
-            Cmd::IfTreeChop(dir) => draw_check_icon(r.center(), r.w, dir),
+        match item {
+            Item::Block(b) => match b.cmd {
+                Cmd::Move(dir) => draw_arrow(r.center(), r.w * 0.8, dir, WHITE),
+                Cmd::Chop(dir) => draw_chop_icon(r.center(), r.w, dir),
+                Cmd::IfTreeChop(dir) => draw_check_icon(r.center(), r.w, dir),
+            },
+            Item::LoopStart { .. } => {
+                draw_bracket(r, r.x + r.w * 0.22, true, WHITE);
+                draw_loop_icon(r.center() + vec2(r.w * 0.14, 0.0), r.w * 0.42, WHITE);
+            }
+            Item::LoopEnd => draw_bracket(r, r.x + r.w * 0.6, false, WHITE),
         }
         if let Some(n) = badge {
             let c = vec2(r.x + r.w - 4.0, r.y + 4.0);
@@ -1205,15 +1319,32 @@ impl Game {
             self.mode,
             Mode::Moving | Mode::Checking | Mode::Chopping | Mode::Bump
         );
+        let current = self.trace.get(self.pc).filter(|_| running);
+
+        // A band behind each loop shows which blocks are inside it.
+        for (i, item) in self.program.iter().enumerate() {
+            if matches!(item, Item::LoopStart { .. }) {
+                let end = self.loop_ends(i).and_then(|(_, e)| e);
+                self.draw_loop_band(i, end.unwrap_or(self.program.len() - 1));
+            }
+        }
+
         for i in 0..slots {
             let mut r = self.slot_rect(i);
-            let Some(&block) = self.program.get(i) else {
-                rounded_rect(r.x, r.y, r.w, r.h, 12.0, SLOT_EMPTY);
+            let Some(&item) = self.program.get(i) else {
+                if !self.loop_band_covers(i) {
+                    rounded_rect(r.x, r.y, r.w, r.h, 12.0, SLOT_EMPTY);
+                }
                 continue;
             };
-            let active = running && i == self.step;
+            // How many more times this loop will run, if it's running now.
+            let looping = current
+                .and_then(|e| e.in_loop)
+                .filter(|&(start, _)| start == i)
+                .map(|(_, left)| left);
+            let active = current.is_some_and(|e| e.item == i);
             let failed = self.failed_step == Some(i);
-            let done = running && i < self.step;
+            let done = current.is_some_and(|e| e.item > i) && looping.is_none();
             if active {
                 r.y -= 6.0;
             }
@@ -1224,18 +1355,57 @@ impl Game {
                 let ring = if failed { STOP_RED } else { WHITE };
                 rounded_rect(r.x - 5.0, r.y - 5.0, r.w + 10.0, r.h + 10.0, 16.0, ring);
             }
-            let mut colour = Self::block_colour(block.cmd);
+            let mut colour = Self::item_colour(item);
             if done {
                 colour = mix(colour, PANEL, 0.55);
             }
-            // While a repeated block runs, its number counts down.
-            let left = if active {
-                block.times - self.rep
-            } else {
-                block.times
+            // While a repeated block or loop runs, its number counts down.
+            let badge = match item {
+                Item::Block(b) if active => current.map(|e| e.left).filter(|_| b.times > 1),
+                Item::Block(b) => (b.times > 1).then_some(b.times),
+                Item::LoopStart { times } => looping.or(Some(times)),
+                Item::LoopEnd => None,
             };
-            let badge = (block.times > 1).then_some(left);
-            Self::draw_block(r, block, colour, badge);
+            Self::draw_item(r, item, colour, badge);
+        }
+    }
+
+    /// Is empty slot `i` inside a loop that's still open?
+    fn loop_band_covers(&self, i: usize) -> bool {
+        self.open_loop().is_some() && i == self.program.len()
+    }
+
+    /// Shade the slots from `start` to `end`, one row at a time. An open loop
+    /// also takes in the next empty slot, where new blocks will go.
+    fn draw_loop_band(&self, start: usize, end: usize) {
+        let open = self.program.get(end) != Some(&Item::LoopEnd);
+        let end = if open {
+            (end + 1).min(self.level().slots - 1)
+        } else {
+            end
+        };
+        let cols = self.strip_cols();
+        let mut i = start;
+        while i <= end {
+            let row_end = end.min((i / cols + 1) * cols - 1);
+            let (a, b) = (self.slot_rect(i), self.slot_rect(row_end));
+            rounded_rect(
+                a.x - 6.0,
+                a.y - 6.0,
+                b.right() - a.x + 12.0,
+                a.h + 12.0,
+                16.0,
+                LOOP_BAND,
+            );
+            i = row_end + 1;
+        }
+        if open {
+            let r = self.slot_rect(end);
+            if end >= self.program.len() {
+                let pulse = (self.time * 4.0).sin() * 0.5 + 0.5;
+                let c = mix(LOOP_BAND, REPEAT_TEAL, 0.3 + pulse * 0.3);
+                rounded_rect(r.x, r.y, r.w, r.h, 12.0, c);
+            }
         }
     }
 
@@ -1257,7 +1427,7 @@ impl Game {
                 Button::Arrow(dir) => (dir_color(dir), 18.0),
                 Button::Axe => (AXE_BROWN, 18.0),
                 Button::Check => (CHECK_SLATE, 18.0),
-                Button::Repeat => (REPEAT_TEAL, 18.0),
+                Button::Repeat | Button::Loop => (REPEAT_TEAL, 18.0),
                 Button::Play if self.running() => (STOP_RED, half),
                 Button::Play => (PLAY_GREEN, half),
                 Button::Undo => (UNDO_YELLOW, 18.0),
@@ -1266,8 +1436,10 @@ impl Game {
             };
             let colour = if enabled { colour } else { DISABLED };
             let size = half * 2.0;
-            // An armed tool glows to say "now pick which way".
-            if self.armed == Some(button) {
+            // An armed tool glows to say "now pick which way", and an open
+            // loop glows until it's closed.
+            let open_loop = button == Button::Loop && self.open_loop().is_some();
+            if self.armed == Some(button) || open_loop {
                 let g = 6.0 + ((self.time * 6.0).sin() * 0.5 + 0.5) * 4.0;
                 rounded_rect(
                     c.x - half - g,
@@ -1302,9 +1474,19 @@ impl Game {
                 }
                 Button::Repeat => {
                     draw_loop_icon(c, half, WHITE);
-                    // Show what the next tap will make the last block.
-                    let next = self.program.last().map_or(2, |b| b.times % MAX_TIMES + 1);
-                    draw_label(&format!("{next}"), c, 28.0, WHITE);
+                    // Show what the next tap will make the last block (or loop).
+                    draw_label(&format!("{}", self.next_times()), c, 28.0, WHITE);
+                }
+                Button::Loop => {
+                    let r = Rect::new(c.x - half, c.y - half, size, size);
+                    // While a loop is open, the button shows how to close it.
+                    if !open_loop {
+                        draw_bracket(r, c.x - size * 0.22, true, WHITE);
+                    }
+                    draw_bracket(r, c.x + size * 0.22, false, WHITE);
+                    if !open_loop {
+                        draw_loop_icon(c, half * 0.6, WHITE);
+                    }
                 }
                 Button::Play if self.running() => {
                     let s = half * 0.38;
