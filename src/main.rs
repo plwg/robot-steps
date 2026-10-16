@@ -330,12 +330,8 @@ fn draw_rain_cloud(c: Vec2, cell: f32, weather: Weather, time: f32) {
     let top = c - vec2(0.0, cell * 0.24);
     match weather {
         // Small and high, clear of the robot's face.
-        Weather::Dry(n) => {
-            let high = c - vec2(0.0, cell * 0.36);
-            draw_puff(high, cell * 0.5);
-            draw_label(&n.to_string(), high, cell * 0.24, RAIN_BLUE);
-        }
-        Weather::Raining(n) => {
+        Weather::Dry(_) => draw_puff(c - vec2(0.0, cell * 0.36), cell * 0.5),
+        Weather::Raining(_) => {
             for i in 0..7 {
                 let x = c.x + (i as f32 / 6.0 - 0.5) * cell * 0.6;
                 let fall = (time * 2.2 + i as f32 * 0.37).fract();
@@ -350,8 +346,6 @@ fn draw_rain_cloud(c: Vec2, cell: f32, weather: Weather, time: f32) {
                 );
             }
             draw_puff_in(top, cell * 0.72, RAIN_CLOUD);
-            // How much longer it rains, in white on the dark cloud.
-            draw_label(&n.to_string(), top, cell * 0.24, WHITE);
         }
     }
 }

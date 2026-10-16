@@ -53,8 +53,8 @@ introduces, in the order programming is usually taught:
     function makes stairs of 1, 2 and 3
 16. **Rain:** rain clouds count down 3, 2, 1, rain for 2, then start again.
     A row under each cloud shows its whole cycle (a dot for each dry tick, a
-    drop for each tick of rain, with the one it's on now ringed), and while
-    it rains the cloud counts down how much is left. Every action takes a
+    drop for each tick of rain, with the one it's on now ringed). Every
+    action takes a
     tick, so sleep while it rains (the sleep block, Zzz, repeated like any
     other) or hurry across before it starts. Being under a cloud when it
     rains is getting wet, and the end of the run
@@ -97,8 +97,8 @@ draws a big, easy-to-spot pointer.
 The pencil button on the level map opens the map maker. Tap the green **+**
 to start a map, then pick a tile on the right (grass, tree, rock, ice,
 water, bridge, mystery cloud, key, door, rain cloud, star or the robot) and tap or drag
-across the map to paint it. Tapping a rain cloud again counts it down: 3, 2,
-1, 3. Under the map, − and + change its width and height and how many slots
+across the map to paint it. Tapping a rain cloud again moves where it starts
+in its cycle (the ringed dot moves along). Under the map, − and + change its width and height and how many slots
 the program has (and each function, when there are functions). The buttons
 under the tiles choose the blocks it allows: the axe, sleep, repeat, loops,
 "repeat until", "if", "else", "not", the two functions and numbers for them.
