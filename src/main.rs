@@ -625,6 +625,9 @@ struct Game {
     editing: usize,
     /// The axe or check button was tapped; the next arrow makes that block.
     armed: Option<Button>,
+    /// Where the last thing added went, in the strip being edited (it isn't
+    /// always the end, when it fills an opened-up slot).
+    last_added: Option<usize>,
     world: World,
     mode: Mode,
     timer: f32,
@@ -719,6 +722,7 @@ impl Game {
             strips: vec![Vec::new()],
             editing: 0,
             armed: None,
+            last_added: None,
             world,
             mode: Mode::Edit,
             timer: 0.0,
@@ -792,6 +796,7 @@ impl Game {
         self.idx = idx;
         self.strips = vec![Vec::new(); 1 + self.level().functions];
         self.editing = 0;
+        self.last_added = None;
         self.particles.clear();
         self.armed = None;
         self.failed_step = None;
@@ -854,11 +859,56 @@ impl Game {
         !level::expand(&self.strips, &self.world).is_empty()
     }
 
-    /// The slot whose count the repeat button changes: the last block, or the
-    /// start of the loop the strip ends with.
+    /// Add an item to the strip being edited. Blocks fill an opened-up slot
+    /// if there is one; brackets go just before it; otherwise it goes on the
+    /// end.
+    fn insert(&mut self, item: Item) {
+        let items = &mut self.strips[self.editing];
+        let gap = items.iter().position(|&i| i == Item::Gap);
+        let at = match (gap, item) {
+            (Some(g), Item::Block(_) | Item::Call(_) | Item::IfStart { .. }) => {
+                items[g] = item;
+                g
+            }
+            (Some(g), _) => {
+                items.insert(g, item);
+                g
+            }
+            (None, _) => {
+                items.push(item);
+                items.len() - 1
+            }
+        };
+        self.last_added = Some(at);
+    }
+
+    /// Take out the last thing added (the end of the strip, if that's not
+    /// known).
+    fn remove_last_added(&mut self) {
+        let len = self.prog().len();
+        match self.last_added.take().filter(|&i| i < len) {
+            Some(i) => {
+                self.prog_mut().remove(i);
+            }
+            None => {
+                self.prog_mut().pop();
+            }
+        }
+    }
+
+    /// Is there room for another block: a free tile, or an opened-up slot?
+    fn can_place(&self) -> bool {
+        self.has_room() || self.prog().contains(&Item::Gap)
+    }
+
+    /// The slot whose count the repeat button changes: the last block added
+    /// (or the start of the loop, if a loop was just closed).
     fn count_slot(&self) -> Option<usize> {
         let items = self.prog();
-        let last = items.len().checked_sub(1)?;
+        let last = self
+            .last_added
+            .filter(|&i| i < items.len())
+            .or(items.len().checked_sub(1))?;
         let (start, _) = pair_ends(items, last).unwrap_or((last, None));
         matches!(items[start], Item::Block(_) | Item::LoopStart { .. }).then_some(start)
     }
@@ -900,15 +950,15 @@ impl Game {
     fn enabled(&self, button: Button) -> bool {
         let editing = self.mode == Mode::Edit;
         match button {
-            Button::Arrow(_) | Button::Axe | Button::Check => editing && self.has_room(),
+            Button::Arrow(_) | Button::Axe | Button::Check => editing && self.can_place(),
             // A loop can hold an "if", but an "if" can't hold a loop.
             Button::Loop => {
                 let open_if = open_if(self.prog()).is_some();
                 editing && (open_loop(self.prog()).is_some() || (self.has_room() && !open_if))
             }
-            Button::If(_) => editing && (self.has_room() || open_if(self.prog()).is_some()),
+            Button::If(_) => editing && (self.can_place() || open_if(self.prog()).is_some()),
             // Calls only go in the main program.
-            Button::Call(_) => editing && self.editing == 0 && self.has_room(),
+            Button::Call(_) => editing && self.editing == 0 && self.can_place(),
             Button::Repeat => editing && self.count_slot().is_some(),
             Button::Clear => editing && !self.prog().is_empty(),
             Button::Undo => editing && (self.armed.is_some() || !self.prog().is_empty()),
@@ -931,12 +981,12 @@ impl Game {
                     Some(Button::Axe) => Cmd::Chop(dir),
                     Some(Button::Check) => Cmd::IfTreeChop(dir),
                     Some(Button::If(sense)) => {
-                        self.prog_mut().push(Item::IfStart { sense, dir });
+                        self.insert(Item::IfStart { sense, dir });
                         return;
                     }
                     _ => Cmd::Move(dir),
                 };
-                self.prog_mut().push(Item::Block(Block { cmd, times: 1 }));
+                self.insert(Item::Block(Block { cmd, times: 1 }));
             }
             Button::Axe | Button::Check => {
                 self.armed = (self.armed != Some(button)).then_some(button);
@@ -944,37 +994,32 @@ impl Game {
             Button::Repeat => self.set_times(self.next_times()),
             Button::Loop => match open_loop(self.prog()) {
                 // Tapped again straight away: never mind.
-                Some(start) if start + 1 == self.prog().len() => {
-                    self.prog_mut().pop();
-                }
+                Some(start) if self.last_added == Some(start) => self.remove_last_added(),
                 Some(_) => {
                     // Closing the loop closes any "if" left open inside it.
                     if open_if(self.prog()).is_some() {
-                        self.prog_mut().push(Item::IfEnd);
+                        self.insert(Item::IfEnd);
                     }
-                    self.prog_mut().push(Item::LoopEnd);
+                    self.insert(Item::LoopEnd);
                 }
-                None => self.prog_mut().push(Item::LoopStart { times: 2 }),
+                None => self.insert(Item::LoopStart { times: 2 }),
             },
             // With an "if" open, the button closes it; otherwise it's like the
             // axe: tap it, then pick a direction.
             Button::If(_) => match open_if(self.prog()) {
-                Some(start) if start + 1 == self.prog().len() => {
-                    self.prog_mut().pop();
-                }
-                Some(_) => self.prog_mut().push(Item::IfEnd),
+                Some(start) if self.last_added == Some(start) => self.remove_last_added(),
+                Some(_) => self.insert(Item::IfEnd),
                 None => self.armed = (self.armed != Some(button)).then_some(button),
             },
             Button::Call(f) => {
                 self.armed = None;
-                self.prog_mut().push(Item::Call(f));
+                self.insert(Item::Call(f));
             }
             Button::Undo if self.armed.is_some() => self.armed = None,
-            Button::Undo => {
-                self.prog_mut().pop();
-            }
+            Button::Undo => self.remove_last_added(),
             Button::Clear => {
                 self.prog_mut().clear();
+                self.last_added = None;
                 self.armed = None;
             }
             Button::Play if self.running() => self.reset_robot(),
@@ -1416,7 +1461,7 @@ impl Game {
                     items.push(Rect::new(x - SLOT_GAP / 2.0, y, BRACKET_W, SLOT));
                     x += BRACKET_W;
                 }
-                Item::Block(_) | Item::Call(_) | Item::IfStart { .. } => {
+                Item::Block(_) | Item::Call(_) | Item::IfStart { .. } | Item::Gap => {
                     wrap(&mut x, &mut y, &mut col);
                     items.push(Rect::new(x, y, SLOT, SLOT));
                     x += step;
@@ -1454,6 +1499,14 @@ impl Game {
     /// out (tapping either end of a loop takes out the loop, but keeps the
     /// blocks inside). Returns whether the tap landed on a strip.
     fn click_strip(&mut self, m: Vec2) -> bool {
+        // The eraser on the item under the pointer takes it out.
+        if let Some((strip, i)) = self.hovered_item()
+            && (m - self.eraser_at(strip, i)).length() < ERASER_R + 4.0
+        {
+            self.editing = strip;
+            self.erase(strip, i);
+            return true;
+        }
         for strip in 0..self.strips.len() {
             if self.labelled() && self.label_rect(strip).contains(m) {
                 self.editing = strip;
@@ -1467,25 +1520,74 @@ impl Game {
             let Some(i) = layout.items.iter().position(|r| r.contains(m)) else {
                 continue;
             };
+            // Tapping a block opens up an empty slot just before it, for the
+            // next block to go in.
+            // There's only ever one: an earlier one moves here.
             self.editing = strip;
+            let room = tiles(&self.strips[strip]) < self.slots_of(strip);
             let items = &mut self.strips[strip];
-            {
-                match pair_ends(items, i) {
-                    Some((start, end)) => {
-                        if let Some(end) = end {
-                            items.remove(end);
-                        }
-                        items.remove(start);
+            let old = items.iter().position(|&it| it == Item::Gap);
+            if items[i] != Item::Gap && (room || old.is_some()) {
+                let i = match old {
+                    Some(g) => {
+                        items.remove(g);
+                        if g < i { i - 1 } else { i }
                     }
-                    None => {
-                        items.remove(i);
-                    }
-                }
+                    None => i,
+                };
+                items.insert(i, Item::Gap);
+                self.last_added = None;
                 self.failed_step = None;
             }
             return true;
         }
         false
+    }
+
+    /// Take out item `i` of a strip. Taking out either end of a loop or "if"
+    /// takes out both ends, but keeps the blocks inside.
+    fn erase(&mut self, strip: usize, i: usize) {
+        let items = &mut self.strips[strip];
+        match pair_ends(items, i) {
+            Some((start, end)) => {
+                if let Some(end) = end {
+                    items.remove(end);
+                }
+                items.remove(start);
+            }
+            None => {
+                items.remove(i);
+            }
+        }
+        self.last_added = None;
+        self.failed_step = None;
+    }
+
+    /// The program item under the pointer, while editing.
+    fn hovered_item(&self) -> Option<Loc> {
+        if self.screen != Screen::Play || self.mode != Mode::Edit {
+            return None;
+        }
+        (0..self.strips.len()).find_map(|strip| {
+            let layout = self.layout(strip);
+            // Include the eraser itself, which pokes out of the item.
+            let i = layout.items.iter().enumerate().position(|(i, r)| {
+                r.contains(self.mouse)
+                    || (self.mouse - self.eraser_at(strip, i)).length() < ERASER_R + 4.0
+            })?;
+            Some((strip, i))
+        })
+    }
+
+    /// Where an item's eraser goes: the top-left corner of a block, above a
+    /// closing bracket, or under an opening one (whose top has the count).
+    fn eraser_at(&self, strip: usize, i: usize) -> Vec2 {
+        let r = self.layout(strip).items[i];
+        match self.strips[strip][i] {
+            Item::LoopStart { .. } => vec2(r.center().x, r.bottom() + 8.0),
+            Item::LoopEnd | Item::IfEnd => vec2(r.center().x, r.y - 8.0),
+            _ => vec2(r.x + 4.0, r.y + 4.0),
+        }
     }
 
     // --- effects --------------------------------------------------------
@@ -1930,6 +2032,7 @@ impl Game {
             Item::LoopStart { .. } | Item::LoopEnd => REPEAT_TEAL,
             Item::IfStart { .. } | Item::IfEnd => IF_LIME,
             Item::Call(_) => CALL_INK,
+            Item::Gap => SLOT_EMPTY,
         }
     }
 
@@ -1947,7 +2050,7 @@ impl Game {
                 Cmd::Chop(dir) => draw_chop_icon(r.center(), r.w, dir),
                 Cmd::IfTreeChop(dir) => draw_check_icon(r.center(), r.w, dir),
             },
-            Item::LoopStart { .. } | Item::LoopEnd | Item::IfEnd => {}
+            Item::LoopStart { .. } | Item::LoopEnd | Item::IfEnd | Item::Gap => {}
             Item::IfStart { sense, dir } => draw_if_icon(r.center(), r.w, sense, dir),
             Item::Call(f) => draw_shape(r.center(), r.w * 0.28, f),
         }
@@ -1962,6 +2065,16 @@ impl Game {
     fn draw_program(&self) {
         for strip in 0..self.strips.len() {
             self.draw_strip(strip);
+        }
+        if let Some((strip, i)) = self.hovered_item() {
+            let c = self.eraser_at(strip, i);
+            let near = (self.mouse - c).length() < ERASER_R + 4.0;
+            let r = if near { ERASER_R + 3.0 } else { ERASER_R };
+            draw_circle(c.x, c.y, r + 3.0, WHITE);
+            draw_circle(c.x, c.y, r, STOP_RED);
+            let k = r * 0.45;
+            draw_line(c.x - k, c.y - k, c.x + k, c.y + k, 4.0, WHITE);
+            draw_line(c.x - k, c.y + k, c.x + k, c.y - k, 4.0, WHITE);
         }
     }
 
@@ -2089,8 +2202,25 @@ impl Game {
                 Item::Block(b) if running_block => current.map(|e| e.left).filter(|_| b.times > 1),
                 Item::Block(b) => (b.times > 1).then_some(b.times),
                 Item::LoopStart { times } => looping.or(Some(times)),
-                Item::LoopEnd | Item::IfStart { .. } | Item::IfEnd | Item::Call(_) => None,
+                Item::LoopEnd | Item::IfStart { .. } | Item::IfEnd | Item::Call(_) | Item::Gap => {
+                    None
+                }
             };
+            if item == Item::Gap {
+                // An opened-up slot pulses, waiting for the next block.
+                let pulse = (self.time * 5.0).sin() * 0.5 + 0.5;
+                let g = 3.0 + pulse * 3.0;
+                rounded_rect(
+                    r.x - g,
+                    r.y - g,
+                    r.w + 2.0 * g,
+                    r.h + 2.0 * g,
+                    14.0 + g,
+                    STAR,
+                );
+                rounded_rect(r.x, r.y, r.w, r.h, 12.0, SLOT_EMPTY);
+                continue;
+            }
             Self::draw_item(r, item, colour, badge);
             // An "if" shows its answer once the robot has looked: yes or no.
             if running_block
@@ -2230,6 +2360,9 @@ impl Game {
     }
 }
 
+/// The size of the eraser that appears on a program block under the pointer.
+const ERASER_R: f32 = 14.0;
+
 /// Levels per row on the level map.
 const MAP_COLS: usize = 8;
 /// The map's back-to-players button.
@@ -2325,7 +2458,7 @@ fn pair_ends(items: &[Item], i: usize) -> Option<(usize, Option<usize>)> {
         Item::IfStart { .. } | Item::IfEnd => {
             (|it| matches!(it, Item::IfStart { .. }), Item::IfEnd)
         }
-        Item::Block(_) | Item::Call(_) => return None,
+        Item::Block(_) | Item::Call(_) | Item::Gap => return None,
     };
     let start = if is_start(&items[i]) {
         i

@@ -14,7 +14,9 @@ Across 48 levels it introduces:
 
 - **Sequences:** up, down, left and right, in order
 - **Debugging:** when the robot bumps into something, the step that went wrong
-  shakes red, and the program stays put to be fixed
+  shakes red, and the program stays put to be fixed. Tapping a block opens an
+  empty slot before it for a missing step, and the eraser that appears on a
+  block under the pointer takes it out
 - **Actions:** an axe block chops down trees (but not rocks)
 - **Repeat:** run one block several times when there aren't enough slots
 - **Conditionals (first version):** mystery clouds become a tree or grass each

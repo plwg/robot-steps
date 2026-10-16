@@ -95,6 +95,9 @@ pub enum Item {
     /// Run function strip `n` (1 or 2). Only allowed in the main strip, so a
     /// function can never call itself forever.
     Call(usize),
+    /// An empty slot opened up in the middle of a program, waiting for a
+    /// block. Running skips it.
+    Gap,
 }
 
 /// How many tiles a strip uses. Loop brackets and the end of an "if" sit
@@ -103,7 +106,12 @@ pub enum Item {
 pub fn tiles(items: &[Item]) -> usize {
     items
         .iter()
-        .filter(|i| matches!(i, Item::Block(_) | Item::Call(_) | Item::IfStart { .. }))
+        .filter(|i| {
+            matches!(
+                i,
+                Item::Block(_) | Item::Call(_) | Item::IfStart { .. } | Item::Gap
+            )
+        })
         .count()
 }
 
@@ -240,7 +248,7 @@ impl Runner<'_> {
                     self.run(f, 0, self.strips[f].len(), None, inner);
                     i += 1;
                 }
-                Item::Call(_) | Item::LoopEnd | Item::IfEnd => i += 1,
+                Item::Call(_) | Item::LoopEnd | Item::IfEnd | Item::Gap => i += 1,
             }
         }
     }
