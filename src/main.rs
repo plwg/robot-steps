@@ -9,7 +9,7 @@ mod progress;
 
 use std::f32::consts::PI;
 
-use level::{Block, Cmd, Dir, Event, Exec, Item, Level, Loc, MAX_TIMES, Pos, Tile, World};
+use level::{Block, Cmd, Dir, Event, Exec, Item, Level, Loc, MAX_TIMES, Pos, Tile, World, tiles};
 use macroquad::prelude::*;
 use macroquad::rand::gen_range;
 
@@ -36,6 +36,8 @@ const SLOTS_PER_ROW: usize = 12;
 const SLOT: f32 = 60.0;
 const SLOT_GAP: f32 = 8.0;
 const STRIP_Y: f32 = 652.0;
+/// Loop brackets sit in a gap this wide between tiles.
+const BRACKET_W: f32 = 26.0;
 
 const SKY: Color = Color::new(0.62, 0.84, 0.97, 1.0);
 const GRASS: Color = Color::new(0.56, 0.82, 0.42, 1.0);
@@ -691,8 +693,9 @@ impl Game {
         }
     }
 
+    /// Is there a free tile? (Loop brackets don't use tiles.)
     fn has_room(&self) -> bool {
-        self.prog().len() < self.slots_of(self.editing)
+        tiles(self.prog()) < self.slots_of(self.editing)
     }
 
     /// Does the program do anything at all?
@@ -782,8 +785,7 @@ impl Game {
                 Some(start) if start + 1 == self.prog().len() => {
                     self.prog_mut().pop();
                 }
-                Some(_) if self.has_room() => self.prog_mut().push(Item::LoopEnd),
-                Some(_) => {}
+                Some(_) => self.prog_mut().push(Item::LoopEnd),
                 None => self.prog_mut().push(Item::LoopStart { times: 2 }),
             },
             Button::Call(f) => {
@@ -1057,7 +1059,7 @@ impl Game {
         if self.level().functions == 0 {
             return BOARD;
         }
-        let top = self.slot_rect(0, 0).y - 12.0;
+        let top = self.strip_origin(0).y - 12.0;
         Rect::new(BOARD.x, BOARD.y, BOARD.w, top - 30.0 - BOARD.y)
     }
 
@@ -1115,17 +1117,63 @@ impl Game {
         Rect::new(o.x, o.y, SLOT, SLOT)
     }
 
-    fn slot_rect(&self, strip: usize, i: usize) -> Rect {
+    /// Where each part of a strip goes. Tiles run along in rows; each loop
+    /// bracket takes a narrow gap between two tiles.
+    fn layout(&self, strip: usize) -> StripLayout {
         let cols = self.strip_cols(strip);
         let step = SLOT + SLOT_GAP;
         let o = self.strip_origin(strip);
         let x0 = if self.labelled() { o.x + step } else { o.x };
-        Rect::new(
-            x0 + (i % cols) as f32 * step,
-            o.y + (i / cols) as f32 * step,
-            SLOT,
-            SLOT,
-        )
+        let (mut x, mut y, mut col) = (x0, o.y, 0);
+        let wrap = |x: &mut f32, y: &mut f32, col: &mut usize| {
+            if *col == cols {
+                *col = 0;
+                *x = x0;
+                *y += step;
+            }
+        };
+        let mut items = Vec::new();
+        for item in &self.strips[strip] {
+            match item {
+                Item::LoopStart { .. } | Item::LoopEnd => {
+                    if matches!(item, Item::LoopStart { .. }) {
+                        wrap(&mut x, &mut y, &mut col);
+                    }
+                    items.push(Rect::new(x - SLOT_GAP / 2.0, y, BRACKET_W, SLOT));
+                    x += BRACKET_W;
+                }
+                Item::Block(_) | Item::Call(_) => {
+                    wrap(&mut x, &mut y, &mut col);
+                    items.push(Rect::new(x, y, SLOT, SLOT));
+                    x += step;
+                    col += 1;
+                }
+            }
+        }
+        let used = tiles(&self.strips[strip]);
+        let mut empty = Vec::new();
+        for _ in used..self.slots_of(strip) {
+            wrap(&mut x, &mut y, &mut col);
+            empty.push(Rect::new(x, y, SLOT, SLOT));
+            x += step;
+            col += 1;
+        }
+        // The panel fits a full row of tiles, plus any brackets.
+        let full_row = x0 + cols as f32 * step - SLOT_GAP;
+        let all = items.iter().chain(&empty);
+        let right = all.clone().map(Rect::right).fold(full_row, f32::max);
+        let bottom = all.map(Rect::bottom).fold(o.y + SLOT, f32::max);
+        let panel = Rect::new(
+            o.x - 12.0,
+            o.y - 12.0,
+            right - o.x + 24.0,
+            bottom - o.y + 24.0,
+        );
+        StripLayout {
+            items,
+            empty,
+            panel,
+        }
     }
 
     /// A tap on a strip picks it for editing, and a tap on a block takes it
@@ -1137,11 +1185,17 @@ impl Game {
                 self.editing = strip;
                 return true;
             }
-            let hit = (0..self.slots_of(strip)).find(|&i| self.slot_rect(strip, i).contains(m));
-            let Some(i) = hit else { continue };
+            let layout = self.layout(strip);
+            if layout.empty.iter().any(|r| r.contains(m)) {
+                self.editing = strip;
+                return true;
+            }
+            let Some(i) = layout.items.iter().position(|r| r.contains(m)) else {
+                continue;
+            };
             self.editing = strip;
             let items = &mut self.strips[strip];
-            if i < items.len() {
+            {
                 match loop_ends(items, i) {
                     Some((start, end)) => {
                         if let Some(end) = end {
@@ -1425,6 +1479,10 @@ impl Game {
     }
 
     fn draw_item(r: Rect, item: Item, colour: Color, badge: Option<u8>) {
+        if let Item::LoopStart { .. } | Item::LoopEnd = item {
+            Self::draw_loop_bracket(r, item == Item::LoopEnd, colour, badge);
+            return;
+        }
         rounded_rect(r.x, r.y + 4.0, r.w, r.h, 12.0, darker(colour, 0.7));
         rounded_rect(r.x, r.y, r.w, r.h, 12.0, colour);
         match item {
@@ -1433,11 +1491,7 @@ impl Game {
                 Cmd::Chop(dir) => draw_chop_icon(r.center(), r.w, dir),
                 Cmd::IfTreeChop(dir) => draw_check_icon(r.center(), r.w, dir),
             },
-            Item::LoopStart { .. } => {
-                draw_bracket(r, r.x + r.w * 0.22, true, WHITE);
-                draw_loop_icon(r.center() + vec2(r.w * 0.14, 0.0), r.w * 0.42, WHITE);
-            }
-            Item::LoopEnd => draw_bracket(r, r.x + r.w * 0.6, false, WHITE),
+            Item::LoopStart { .. } | Item::LoopEnd => {}
             Item::Call(f) => draw_shape(r.center(), r.w * 0.28, f),
         }
         if let Some(n) = badge {
@@ -1454,26 +1508,35 @@ impl Game {
         }
     }
 
+    /// A loop bracket in the gap between tiles: `[` with the loop count on
+    /// top, or `]`.
+    fn draw_loop_bracket(r: Rect, close: bool, colour: Color, badge: Option<u8>) {
+        let t = 7.0;
+        let serif = 11.0;
+        let (top, bottom) = (r.y - 4.0, r.bottom() + 4.0);
+        let x = r.center().x - t / 2.0;
+        draw_rectangle(x, top, t, bottom - top, colour);
+        let sx = if close { x - serif } else { x };
+        for y in [top, bottom - t] {
+            draw_rectangle(sx, y, serif + t, t, colour);
+        }
+        if let Some(n) = badge {
+            let c = vec2(r.center().x, top - 2.0);
+            draw_circle(c.x, c.y, 15.0, colour);
+            draw_circle(c.x, c.y, 12.0, WHITE);
+            draw_label(&format!("{n}"), c, 24.0, INK);
+        }
+    }
+
     fn draw_strip(&self, strip: usize) {
         let items = &self.strips[strip];
-        let slots = self.slots_of(strip);
-        let first = if self.labelled() {
-            self.label_rect(strip)
-        } else {
-            self.slot_rect(strip, 0)
-        };
-        let last = self.slot_rect(strip, slots - 1);
-        let right = self.slot_rect(strip, self.strip_cols(strip) - 1);
-        let (x, y) = (first.x - 12.0, first.y - 12.0);
-        let (w, h) = (
-            right.right() - first.x + 24.0,
-            last.bottom() - first.y + 24.0,
-        );
+        let layout = self.layout(strip);
+        let p = layout.panel;
         // The strip being edited has a yellow outline (when there's a choice).
         if self.labelled() && strip == self.editing && self.mode == Mode::Edit {
-            rounded_rect(x - 5.0, y - 5.0, w + 10.0, h + 10.0, 25.0, STAR);
+            rounded_rect(p.x - 5.0, p.y - 5.0, p.w + 10.0, p.h + 10.0, 25.0, STAR);
         }
-        rounded_rect(x, y, w, h, 20.0, PANEL);
+        rounded_rect(p.x, p.y, p.w, p.h, 20.0, PANEL);
         if self.labelled() {
             let r = self.label_rect(strip);
             if strip == 0 {
@@ -1496,22 +1559,32 @@ impl Game {
             _ => (e.at.0 == strip).then_some(e.at.1),
         });
 
-        // A band behind each loop shows which blocks are inside it.
+        // A band behind each loop shows which blocks are inside it. An open
+        // loop also takes in the next empty tile, where new blocks will go.
+        let open = open_loop(items);
         for (i, item) in items.iter().enumerate() {
-            if matches!(item, Item::LoopStart { .. }) {
-                let end = loop_ends(items, i).and_then(|(_, e)| e);
-                self.draw_loop_band(strip, i, end.unwrap_or(items.len() - 1));
+            if !matches!(item, Item::LoopStart { .. }) {
+                continue;
             }
+            let end = loop_ends(items, i).and_then(|(_, e)| e);
+            let mut rects: Vec<Rect> = layout.items[i..=end.unwrap_or(items.len() - 1)].to_vec();
+            if end.is_none() {
+                rects.extend(layout.empty.first());
+            }
+            draw_band(&rects);
+        }
+        for (k, r) in layout.empty.iter().enumerate() {
+            let colour = if k == 0 && open.is_some() {
+                let pulse = (self.time * 4.0).sin() * 0.5 + 0.5;
+                mix(LOOP_BAND, REPEAT_TEAL, 0.3 + pulse * 0.3)
+            } else {
+                SLOT_EMPTY
+            };
+            rounded_rect(r.x, r.y, r.w, r.h, 12.0, colour);
         }
 
-        for i in 0..slots {
-            let mut r = self.slot_rect(strip, i);
-            let Some(&item) = items.get(i) else {
-                if !self.loop_band_covers(strip, i) {
-                    rounded_rect(r.x, r.y, r.w, r.h, 12.0, SLOT_EMPTY);
-                }
-                continue;
-            };
+        for (i, &item) in items.iter().enumerate() {
+            let mut r = layout.items[i];
             // How many more times this loop will run, if it's running now.
             let looping = current
                 .and_then(|e| match strip {
@@ -1547,45 +1620,6 @@ impl Game {
                 Item::LoopEnd | Item::Call(_) => None,
             };
             Self::draw_item(r, item, colour, badge);
-        }
-    }
-
-    /// Is empty slot `i` inside a loop that's still open?
-    fn loop_band_covers(&self, strip: usize, i: usize) -> bool {
-        let items = &self.strips[strip];
-        open_loop(items).is_some() && i == items.len()
-    }
-
-    /// Shade the slots from `start` to `end`, one row at a time. An open loop
-    /// also takes in the next empty slot, where new blocks will go.
-    fn draw_loop_band(&self, strip: usize, start: usize, end: usize) {
-        let items = &self.strips[strip];
-        let open = items.get(end) != Some(&Item::LoopEnd);
-        let end = if open {
-            (end + 1).min(self.slots_of(strip) - 1)
-        } else {
-            end
-        };
-        let cols = self.strip_cols(strip);
-        let mut i = start;
-        while i <= end {
-            let row_end = end.min((i / cols + 1) * cols - 1);
-            let (a, b) = (self.slot_rect(strip, i), self.slot_rect(strip, row_end));
-            rounded_rect(
-                a.x - 6.0,
-                a.y - 6.0,
-                b.right() - a.x + 12.0,
-                a.h + 12.0,
-                16.0,
-                LOOP_BAND,
-            );
-            i = row_end + 1;
-        }
-        if open && end >= items.len() {
-            let r = self.slot_rect(strip, end);
-            let pulse = (self.time * 4.0).sin() * 0.5 + 0.5;
-            let c = mix(LOOP_BAND, REPEAT_TEAL, 0.3 + pulse * 0.3);
-            rounded_rect(r.x, r.y, r.w, r.h, 12.0, c);
         }
     }
 
@@ -1699,6 +1733,41 @@ impl Game {
         draw_circle(c.x, c.y + 6.0, r, darker(PLAY_GREEN, 0.7));
         draw_circle(c.x, c.y, r, PLAY_GREEN);
         draw_arrow(c, r * 1.4, Dir::Right, WHITE);
+    }
+}
+
+/// Where each part of a program strip goes on screen.
+struct StripLayout {
+    /// One rect per item: a tile for each block or call, and a narrow gap
+    /// for each loop bracket.
+    items: Vec<Rect>,
+    /// The empty tiles after the program.
+    empty: Vec<Rect>,
+    /// The panel behind the strip.
+    panel: Rect,
+}
+
+/// Shade behind `rects` (the inside of a loop), one row at a time.
+fn draw_band(rects: &[Rect]) {
+    let mut rows: Vec<(f32, f32, f32)> = Vec::new();
+    for r in rects {
+        match rows.iter_mut().find(|(y, _, _)| *y == r.y) {
+            Some(row) => {
+                row.1 = row.1.min(r.x);
+                row.2 = row.2.max(r.right());
+            }
+            None => rows.push((r.y, r.x, r.right())),
+        }
+    }
+    for (y, left, right) in rows {
+        rounded_rect(
+            left - 6.0,
+            y - 6.0,
+            right - left + 12.0,
+            SLOT + 12.0,
+            16.0,
+            LOOP_BAND,
+        );
     }
 }
 

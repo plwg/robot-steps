@@ -81,6 +81,15 @@ pub enum Item {
     Call(usize),
 }
 
+/// How many tiles a strip uses. Loop brackets sit between tiles, so only
+/// blocks and calls count towards a level's slots.
+pub fn tiles(items: &[Item]) -> usize {
+    items
+        .iter()
+        .filter(|i| matches!(i, Item::Block(_) | Item::Call(_)))
+        .count()
+}
+
 /// A slot in the program: (strip, index). Strip 0 is the main program, and
 /// strips 1 and 2 are the functions.
 pub type Loc = (usize, usize);
@@ -324,7 +333,7 @@ pub const LEVELS: &[LevelDef] = &[
     // main program can run (call) as often as it likes. First a familiar map
     // (the zig-zag from the loop levels) ---
     level(&["...@...@..*", ".@.@.@.@.@@", "R@...@...@@"]).with_functions(3, 1, 4),
-    level(&["@*@@*@*", "@.@@.@.", "R......"]).with_functions(6, 1, 3),
+    level(&["@*@*@@@*", "@.@.@@@.", "R......."]).with_functions(5, 1, 3),
     level(&[
         "@@@@@@@*", "@@@@@@..", "@@@@@..@", "@@@...@@", "@@..@@@@", "@..@@@@@", "R.@@@@@@",
     ])
@@ -505,7 +514,7 @@ pub fn all_levels() -> Vec<Level> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::{HashSet, VecDeque};
+    use std::collections::{HashMap, HashSet, VecDeque};
 
     /// Known solutions for the loop levels (too many loop programs to search).
     /// `R` move right, `cR` chop right, `?R` check right, a number repeats a
@@ -525,7 +534,7 @@ mod tests {
     /// function after a `|`. `f1` calls the first function.
     const FUNCTION_SOLUTIONS: &[(usize, &str)] = &[
         (43, "f1 f1 f1 | U2 R2 D2 R2"),
-        (44, "R f1 R3 f1 R2 f1 | U2 D2"),
+        (44, "f1 R f1 R3 f1 | R U2 D2"),
         (45, "f1 R f1 | [ R U ]3"),
         (46, "[ f1 ]3 | cR R U2 D2 R"),
         (47, "f1 f2 f2 f1 f2 f1 | U2 D2 R | cR R"),
@@ -608,7 +617,10 @@ mod tests {
         for &(n, text) in LOOP_SOLUTIONS {
             let level = &levels[n - 1];
             let program = parse_program(text);
-            assert!(program.len() <= level.slots, "level {n} solution too long");
+            assert!(
+                tiles(&program) <= level.slots,
+                "level {n} solution too long"
+            );
             assert!(always_wins(level, &[program]), "level {n} solution fails");
         }
     }
@@ -632,9 +644,9 @@ mod tests {
                 1 + level.functions,
                 "level {n}: wrong strip count"
             );
-            assert!(strips[0].len() <= level.slots, "level {n}: main too long");
+            assert!(tiles(&strips[0]) <= level.slots, "level {n}: main too long");
             for f in &strips[1..] {
-                assert!(f.len() <= level.fn_slots, "level {n}: function too long");
+                assert!(tiles(f) <= level.fn_slots, "level {n}: function too long");
                 assert!(
                     !f.iter().any(|i| matches!(i, Item::Call(_))),
                     "level {n}: functions can't call functions"
@@ -644,37 +656,41 @@ mod tests {
         }
     }
 
-    enum Status {
-        Fail,
-        Alive,
-        Win,
-    }
+    /// One world per outcome after running a program; `None` once won.
+    type Worlds = Vec<Option<World>>;
 
-    /// Run a single-strip program in every outcome.
-    fn status(level: &Level, items: &[Item]) -> Status {
+    /// Run a single-strip program in every outcome: `None` if it bumps into
+    /// something in any of them.
+    fn run(level: &Level, items: &[Item]) -> Option<Worlds> {
         let trace = expand(&[items.to_vec()]);
-        let mut all_won = true;
-        for outcome in level.outcomes() {
-            let mut world = level.revealed(&outcome);
-            let mut won = false;
+        let mut worlds: Worlds = level
+            .outcomes()
+            .iter()
+            .map(|o| Some(level.revealed(o)))
+            .collect();
+        for slot in &mut worlds {
+            let Some(world) = slot else { continue };
             for exec in &trace {
-                if world.act(exec.cmd).is_err() {
-                    return Status::Fail;
-                }
+                world.act(exec.cmd).ok()?;
                 if world.stars.is_empty() {
-                    won = true;
+                    *slot = None;
                     break;
                 }
             }
-            all_won &= won;
         }
-        if all_won { Status::Win } else { Status::Alive }
+        Some(worlds)
     }
 
-    /// Can the level be won in `slots` with blocks and (un-nested) loops, but
-    /// no functions? A depth-first search over programs that gives up on any
-    /// program whose first run already bumps into something.
-    fn fits_with_loops(level: &Level, slots: usize) -> bool {
+    fn won(worlds: &Worlds) -> bool {
+        worlds.iter().all(Option::is_none)
+    }
+
+    /// Can the level be won in `slots` tiles with blocks and (un-nested)
+    /// loops, but no functions? Returns a winning program if so. A depth-first
+    /// search that gives up on any program whose first run already bumps into
+    /// something, and never searches on from a position it has already
+    /// reached using no more tiles.
+    fn fits_with_loops(level: &Level, slots: usize) -> Option<Vec<Item>> {
         let mut blocks = Vec::new();
         for dir in Dir::ALL {
             let mut cmds = vec![Cmd::Move(dir)];
@@ -691,75 +707,104 @@ mod tests {
             }
         }
 
-        fn search(
-            level: &Level,
-            blocks: &[Item],
-            items: &mut Vec<Item>,
-            open: Option<usize>,
+        struct Search<'a> {
+            level: &'a Level,
+            blocks: Vec<Item>,
             slots: usize,
-        ) -> bool {
-            // A loop still open at the end runs to the end of the program:
-            // try every count. (While searching, it runs once.)
-            if let Some(start) = open {
-                for k in 2..=MAX_TIMES {
-                    items[start] = Item::LoopStart { times: k };
-                    if matches!(status(level, items), Status::Win) {
+            /// Positions already searched from (with no loop open), and the
+            /// fewest tiles used to get there.
+            seen: HashMap<Worlds, usize>,
+        }
+
+        impl Search<'_> {
+            /// Keep searching from `items`, which ran without bumping.
+            fn from(&mut self, items: &mut Vec<Item>, open: Option<usize>, worlds: Worlds) -> bool {
+                if won(&worlds) {
+                    return true;
+                }
+                let used = tiles(items);
+                match open {
+                    None => {
+                        if self.seen.get(&worlds).is_some_and(|&u| u <= used) {
+                            return false;
+                        }
+                        self.seen.insert(worlds, used);
+                    }
+                    // A loop still open at the end runs to the end of the
+                    // program: try every count. (While searching, it runs once.)
+                    Some(start) => {
+                        for k in 2..=MAX_TIMES {
+                            items[start] = Item::LoopStart { times: k };
+                            if run(self.level, items).is_some_and(|w| won(&w)) {
+                                return true;
+                            }
+                        }
+                        items[start] = Item::LoopStart { times: 1 };
+                    }
+                }
+                if used == self.slots {
+                    return false;
+                }
+                for b in 0..self.blocks.len() {
+                    let block = self.blocks[b];
+                    if self.try_item(items, block, open) {
                         return true;
                     }
                 }
-                items[start] = Item::LoopStart { times: 1 };
-            }
-            if items.len() == slots {
-                return false;
-            }
-            let try_push = |items: &mut Vec<Item>, item: Item, open: Option<usize>| {
-                items.push(item);
-                let found = match status(level, items) {
-                    Status::Win => true,
-                    Status::Fail => false,
-                    Status::Alive => search(level, blocks, items, open, slots),
-                };
-                items.pop();
-                found
-            };
-            for &block in blocks {
-                if try_push(items, block, open) {
-                    return true;
-                }
-            }
-            match open {
-                None => try_push(items, Item::LoopStart { times: 1 }, Some(items.len())),
-                Some(start) if items.len() > start + 1 => {
-                    items.push(Item::LoopEnd);
-                    for k in 2..=MAX_TIMES {
-                        items[start] = Item::LoopStart { times: k };
-                        let found = match status(level, items) {
-                            Status::Win => true,
-                            Status::Fail => false,
-                            Status::Alive => search(level, blocks, items, None, slots),
-                        };
-                        if found {
-                            return true;
+                match open {
+                    None => self.try_item(items, Item::LoopStart { times: 1 }, Some(items.len())),
+                    // Close the loop. A loop round one block is just repeat,
+                    // so loops hold at least two.
+                    Some(start) if tiles(&items[start..]) >= 2 => {
+                        items.push(Item::LoopEnd);
+                        for k in 2..=MAX_TIMES {
+                            items[start] = Item::LoopStart { times: k };
+                            if let Some(worlds) = run(self.level, items)
+                                && self.from(items, None, worlds)
+                            {
+                                return true;
+                            }
                         }
+                        items[start] = Item::LoopStart { times: 1 };
+                        items.pop();
+                        false
                     }
-                    items[start] = Item::LoopStart { times: 1 };
-                    items.pop();
-                    false
+                    Some(_) => false,
                 }
-                Some(_) => false,
+            }
+
+            fn try_item(&mut self, items: &mut Vec<Item>, item: Item, open: Option<usize>) -> bool {
+                items.push(item);
+                let found = match run(self.level, items) {
+                    Some(worlds) => self.from(items, open, worlds),
+                    None => false,
+                };
+                if !found {
+                    items.pop();
+                }
+                found
             }
         }
 
-        search(level, &blocks, &mut Vec::new(), None, slots)
+        let mut search = Search {
+            level,
+            blocks,
+            slots,
+            seen: HashMap::new(),
+        };
+        let mut items = Vec::new();
+        let start = run(level, &items)?;
+        search.from(&mut items, None, start).then_some(items)
     }
 
     #[test]
     fn function_levels_need_a_function() {
         for (i, level) in all_levels().iter().enumerate() {
-            if level.functions > 0 {
-                assert!(
-                    !fits_with_loops(level, level.slots),
-                    "level {} fits in {} slots with loops alone",
+            if level.functions > 0
+                && let Some(program) = fits_with_loops(level, level.slots)
+            {
+                panic!(
+                    "level {} fits in {} slots with loops alone: {program:?}",
                     i + 1,
                     level.slots
                 );
@@ -772,10 +817,8 @@ mod tests {
         // Sanity check for `fits_with_loops`: it finds the loop levels' answers.
         let levels = all_levels();
         for &(n, _) in LOOP_SOLUTIONS {
-            assert!(
-                fits_with_loops(&levels[n - 1], levels[n - 1].slots),
-                "level {n}"
-            );
+            let level = &levels[n - 1];
+            assert!(fits_with_loops(level, level.slots).is_some(), "level {n}");
         }
     }
 
