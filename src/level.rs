@@ -305,7 +305,10 @@ pub const LEVELS: &[LevelDef] = &[
     level(&["R..?..#..", "@@@@@@@@.", "*..?..?.."])
         .with_check()
         .with_repeat(14),
-    // --- Loops: repeat a whole group of blocks ---
+    // --- Loops: repeat a whole group of blocks. First two familiar maps
+    // (levels 7 and 11) with too few slots to do them the old way ---
+    level(&["R.##", "#..#", "##.*"]).with_loops(4),
+    level(&["R#*#*", ".#.#.", "....."]).with_loops(5),
     level(&[
         "R.@@@@@", "@..@@@@", "@@..@@@", "@@@..@@", "@@@@..@", "@@@@@.*",
     ])
@@ -318,7 +321,9 @@ pub const LEVELS: &[LevelDef] = &[
         .with_check()
         .with_loops(6),
     // --- Functions: a strip of blocks with a shape for a name, which the
-    // main program can run (call) as often as it likes ---
+    // main program can run (call) as often as it likes. First a familiar map
+    // (the zig-zag from the loop levels) ---
+    level(&["...@...@..*", ".@.@.@.@.@@", "R@...@...@@"]).with_functions(3, 1, 4),
     level(&["@*@@*@*", "@.@@.@.", "R......"]).with_functions(6, 1, 3),
     level(&[
         "@@@@@@@*", "@@@@@@..", "@@@@@..@", "@@@...@@", "@@..@@@@", "@..@@@@@", "R.@@@@@@",
@@ -506,21 +511,24 @@ mod tests {
     /// `R` move right, `cR` chop right, `?R` check right, a number repeats a
     /// block, `[` opens a loop and `]4` closes it, running it 4 times.
     const LOOP_SOLUTIONS: &[(usize, &str)] = &[
-        (35, "[ R D ]5 R"),
-        (36, "[ R2 D ]3 R2"),
-        (37, "[ U2 R2 D2 R2 ]2 U2 R2"),
-        (38, "[ cR R2 ]4"),
-        (39, "[ ?R R ]5"),
-        (40, "[ ?R R D ]4 R"),
+        (35, "[ R D ]3"),
+        (36, "[ D2 R2 U2 ]2"),
+        (37, "[ R D ]5 R"),
+        (38, "[ R2 D ]3 R2"),
+        (39, "[ U2 R2 D2 R2 ]2 U2 R2"),
+        (40, "[ cR R2 ]4"),
+        (41, "[ ?R R ]5"),
+        (42, "[ ?R R D ]4 R"),
     ];
 
     /// Known solutions for the function levels: the main strip, then each
     /// function after a `|`. `f1` calls the first function.
     const FUNCTION_SOLUTIONS: &[(usize, &str)] = &[
-        (41, "R f1 R3 f1 R2 f1 | U2 D2"),
-        (42, "f1 R f1 | [ R U ]3"),
-        (43, "[ f1 ]3 | cR R U2 D2 R"),
-        (44, "f1 f2 f2 f1 f2 f1 | U2 D2 R | cR R"),
+        (43, "f1 f1 f1 | U2 R2 D2 R2"),
+        (44, "R f1 R3 f1 R2 f1 | U2 D2"),
+        (45, "f1 R f1 | [ R U ]3"),
+        (46, "[ f1 ]3 | cR R U2 D2 R"),
+        (47, "f1 f2 f2 f1 f2 f1 | U2 D2 R | cR R"),
     ];
 
     /// A whole program: strips separated by `|`.

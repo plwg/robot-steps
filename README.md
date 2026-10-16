@@ -6,7 +6,7 @@ stars. There's no reading required.
 
 ![Level 44: the main program calls the ● and ▲ functions, and the robot is partway through ▲, chopping a tree](docs/screenshot.png)
 
-Across 44 levels it introduces:
+Across 47 levels it introduces:
 
 - **Sequences:** up, down, left and right, in order
 - **Debugging:** when the robot bumps into something, the step that went wrong
@@ -18,6 +18,9 @@ Across 44 levels it introduces:
 - **Loops:** repeat a whole group of blocks
 - **Functions:** extra strips of blocks named with a shape (● and ▲) that the
   main program calls whenever it needs them
+
+Each new tool starts on a map from earlier in the game, with too few slots
+to solve it the old way, before moving on to new maps.
 
 Finished levels are saved, and the game carries on from the first unfinished one.
 
