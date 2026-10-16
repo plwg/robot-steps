@@ -5,30 +5,30 @@ mod level;
 
 use std::f32::consts::PI;
 
-use level::{Dir, Level, MAX_PROGRAM, Pos};
+use level::{Block, Cmd, Dir, Event, Level, MAX_TIMES, Pos, Tile, World};
 use macroquad::prelude::*;
 use macroquad::rand::gen_range;
 
-// Everything is drawn on a fixed 1200x800 canvas that is scaled to fit the window.
-const W: f32 = 1200.0;
+// Everything is drawn on a fixed 16:9 canvas that is scaled to fit the window.
+const W: f32 = 1422.0;
 const H: f32 = 800.0;
 
-const STEP_TIME: f32 = 0.5;
+const STEP_TIME: f32 = 0.45;
+const CHOP_TIME: f32 = 0.7;
 const BUMP_TIME: f32 = 0.8;
 const SAD_TIME: f32 = 1.4;
 
 const BOARD: Rect = Rect {
     x: 20.0,
     y: 70.0,
-    w: 820.0,
-    h: 560.0,
+    w: 1060.0,
+    h: 540.0,
 };
 const MAX_CELL: f32 = 108.0;
 
 const SLOTS_PER_ROW: usize = 12;
 const SLOT: f32 = 60.0;
 const SLOT_GAP: f32 = 8.0;
-const STRIP_X: f32 = 26.0;
 const STRIP_Y: f32 = 652.0;
 
 const SKY: Color = Color::new(0.62, 0.84, 0.97, 1.0);
@@ -38,8 +38,15 @@ const STAR: Color = Color::new(1.0, 0.82, 0.1, 1.0);
 const SHADOW: Color = Color::new(0.0, 0.0, 0.0, 0.18);
 const PANEL: Color = Color::new(0.93, 0.96, 1.0, 1.0);
 const SLOT_EMPTY: Color = Color::new(0.82, 0.88, 0.95, 1.0);
+const DISABLED: Color = Color::new(0.75, 0.78, 0.82, 1.0);
+const INK: Color = Color::new(0.15, 0.2, 0.32, 1.0);
 const PLAY_GREEN: Color = Color::new(0.15, 0.7, 0.25, 1.0);
 const STOP_RED: Color = Color::new(0.9, 0.25, 0.25, 1.0);
+const UNDO_YELLOW: Color = Color::new(0.95, 0.7, 0.1, 1.0);
+const AXE_BROWN: Color = Color::new(0.62, 0.4, 0.22, 1.0);
+const REPEAT_TEAL: Color = Color::new(0.1, 0.65, 0.65, 1.0);
+const WOOD: Color = Color::new(0.55, 0.35, 0.2, 1.0);
+const LEAF: Color = Color::new(0.16, 0.55, 0.22, 1.0);
 
 fn dir_color(dir: Dir) -> Color {
     match dir {
@@ -53,6 +60,10 @@ fn dir_color(dir: Dir) -> Color {
 fn dir_vec(dir: Dir) -> Vec2 {
     let (dx, dy) = dir.delta();
     vec2(dx as f32, dy as f32)
+}
+
+fn pos_vec((x, y): Pos) -> Vec2 {
+    vec2(x as f32, y as f32)
 }
 
 fn mix(a: Color, b: Color, t: f32) -> Color {
@@ -87,13 +98,43 @@ fn rounded_rect(x: f32, y: f32, w: f32, h: f32, r: f32, color: Color) {
     }
 }
 
+/// A quad given as four corners.
+fn draw_quad(a: Vec2, b: Vec2, c: Vec2, d: Vec2, color: Color) {
+    draw_triangle(a, b, c, color);
+    draw_triangle(a, c, d, color);
+}
+
+/// Text centred on a point. Rendered at the real screen resolution so it
+/// stays sharp however much the canvas is scaled up.
+fn draw_label(text: &str, centre: Vec2, size: f32, color: Color) {
+    let scale = (screen_width() / W).min(screen_height() / H);
+    let font_size = (size * scale).round() as u16;
+    let dims = measure_text(text, None, font_size, 1.0 / scale);
+    draw_text_ex(
+        text,
+        centre.x - dims.width / 2.0,
+        centre.y + dims.offset_y / 2.0,
+        TextParams {
+            font_size,
+            font_scale: 1.0 / scale,
+            color,
+            ..Default::default()
+        },
+    );
+}
+
 /// A chunky arrow pointing in `dir`, sized to fit a box of `size`.
 fn draw_arrow(c: Vec2, size: f32, dir: Dir, color: Color) {
     let d = dir_vec(dir);
     let n = vec2(-d.y, d.x);
     let p = |along: f32, across: f32| c + d * along * size + n * across * size;
-    draw_triangle(p(-0.4, -0.13), p(0.05, -0.13), p(0.05, 0.13), color);
-    draw_triangle(p(-0.4, -0.13), p(0.05, 0.13), p(-0.4, 0.13), color);
+    draw_quad(
+        p(-0.4, -0.13),
+        p(0.05, -0.13),
+        p(0.05, 0.13),
+        p(-0.4, 0.13),
+        color,
+    );
     draw_triangle(p(0.42, 0.0), p(0.0, -0.36), p(0.0, 0.36), color);
 }
 
@@ -111,7 +152,7 @@ fn draw_star(c: Vec2, r: f32, spin: f32, color: Color) {
 }
 
 fn draw_arc(c: Vec2, r: f32, from: f32, to: f32, thickness: f32, color: Color) {
-    const SEGMENTS: usize = 12;
+    const SEGMENTS: usize = 16;
     let at = |t: f32| {
         let a = from + (to - from) * t;
         c + vec2(a.cos(), a.sin()) * r
@@ -124,22 +165,121 @@ fn draw_arc(c: Vec2, r: f32, from: f32, to: f32, thickness: f32, color: Color) {
     }
 }
 
-fn draw_tree(c: Vec2, cell: f32) {
-    let s = cell;
-    draw_ellipse(c.x, c.y + s * 0.36, s * 0.3, s * 0.08, 0.0, SHADOW);
-    draw_rectangle(
-        c.x - s * 0.07,
-        c.y + s * 0.05,
-        s * 0.14,
-        s * 0.32,
-        Color::new(0.55, 0.35, 0.2, 1.0),
+/// A tree that can be shrunk (`scale`) and leaned over (`sway`) while being chopped.
+fn draw_tree(c: Vec2, cell: f32, scale: f32, sway: f32) {
+    let s = cell * scale;
+    let base = c + vec2(0.0, cell * 0.37);
+    draw_ellipse(base.x, base.y, s * 0.3, s * 0.08, 0.0, SHADOW);
+    let top = base + vec2(sway * s, -s * 0.37);
+    draw_quad(
+        base - vec2(s * 0.07, 0.0),
+        base + vec2(s * 0.07, 0.0),
+        top + vec2(s * 0.07, 0.0),
+        top - vec2(s * 0.07, 0.0),
+        WOOD,
     );
-    let leaf = Color::new(0.16, 0.55, 0.22, 1.0);
     let light = Color::new(0.24, 0.66, 0.3, 1.0);
-    draw_circle(c.x - s * 0.15, c.y - s * 0.02, s * 0.2, leaf);
-    draw_circle(c.x + s * 0.15, c.y - s * 0.02, s * 0.2, leaf);
-    draw_circle(c.x, c.y - s * 0.2, s * 0.24, leaf);
-    draw_circle(c.x - s * 0.06, c.y - s * 0.26, s * 0.1, light);
+    let crown = top - vec2(0.0, s * 0.05);
+    draw_circle(crown.x - s * 0.15, crown.y, s * 0.2, LEAF);
+    draw_circle(crown.x + s * 0.15, crown.y, s * 0.2, LEAF);
+    draw_circle(crown.x, crown.y - s * 0.18, s * 0.24, LEAF);
+    draw_circle(crown.x - s * 0.06, crown.y - s * 0.24, s * 0.1, light);
+}
+
+fn draw_stump(c: Vec2, cell: f32) {
+    let s = cell;
+    let base = c + vec2(0.0, s * 0.2);
+    draw_ellipse(base.x, base.y + s * 0.08, s * 0.22, s * 0.07, 0.0, SHADOW);
+    draw_rectangle(
+        base.x - s * 0.14,
+        base.y - s * 0.08,
+        s * 0.28,
+        s * 0.14,
+        WOOD,
+    );
+    draw_ellipse(
+        base.x,
+        base.y - s * 0.08,
+        s * 0.14,
+        s * 0.06,
+        0.0,
+        darker(WOOD, 1.5),
+    );
+    draw_ellipse(
+        base.x,
+        base.y - s * 0.08,
+        s * 0.07,
+        s * 0.03,
+        0.0,
+        darker(WOOD, 1.2),
+    );
+}
+
+fn draw_rock(c: Vec2, cell: f32) {
+    let s = cell;
+    let base = c + vec2(0.0, s * 0.25);
+    draw_ellipse(base.x, base.y + s * 0.08, s * 0.36, s * 0.08, 0.0, SHADOW);
+    let grey = Color::new(0.55, 0.57, 0.62, 1.0);
+    let dark = darker(grey, 0.85);
+    draw_circle(base.x - s * 0.14, base.y - s * 0.06, s * 0.2, dark);
+    draw_circle(base.x + s * 0.12, base.y - s * 0.04, s * 0.22, dark);
+    draw_circle(base.x - s * 0.02, base.y - s * 0.18, s * 0.24, grey);
+    draw_circle(
+        base.x - s * 0.1,
+        base.y - s * 0.26,
+        s * 0.08,
+        darker(grey, 1.25),
+    );
+}
+
+/// An axe with its blade facing `dir`; `swing` tilts it (radians).
+fn draw_axe(c: Vec2, size: f32, dir: Dir, swing: f32, handle: Color) {
+    let fwd = dir_vec(dir);
+    let (s, co) = swing.sin_cos();
+    let fwd = vec2(fwd.x * co - fwd.y * s, fwd.x * s + fwd.y * co);
+    // The handle runs at right angles to `dir`, with the head at one end.
+    let along = vec2(-fwd.y, fwd.x);
+    let p = |a: f32, b: f32| c + along * a * size + fwd * b * size;
+    draw_quad(
+        p(-0.42, -0.05),
+        p(-0.42, 0.05),
+        p(0.4, 0.05),
+        p(0.4, -0.05),
+        handle,
+    );
+    let blade = Color::new(0.78, 0.8, 0.85, 1.0);
+    draw_quad(
+        p(0.15, 0.0),
+        p(0.4, 0.0),
+        p(0.5, 0.36),
+        p(0.05, 0.36),
+        blade,
+    );
+    draw_quad(
+        p(0.05, 0.3),
+        p(0.5, 0.3),
+        p(0.5, 0.36),
+        p(0.05, 0.36),
+        WHITE,
+    );
+}
+
+/// A circular "loop" arrow.
+fn draw_loop_icon(c: Vec2, r: f32, color: Color) {
+    let rr = r * 0.55;
+    let thick = r * 0.13;
+    let end = -0.35 * PI;
+    // The arc runs round to `end`, and the arrowhead carries on past it.
+    draw_arc(c, rr, end - 2.0 * PI + 0.9, end, thick, color);
+    let out = vec2(end.cos(), end.sin());
+    let tip = c + out * rr;
+    let tangent = vec2(-end.sin(), end.cos());
+    draw_triangle(
+        tip - tangent * r * 0.18 + out * r * 0.2,
+        tip - tangent * r * 0.18 - out * r * 0.2,
+        tip + tangent * r * 0.16,
+        color,
+    );
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -163,11 +303,9 @@ fn draw_robot(c: Vec2, cell: f32, face: Face, look: Vec2, time: f32, lift: f32) 
 
     let body = Color::new(0.55, 0.78, 0.98, 1.0);
     let trim = Color::new(0.3, 0.5, 0.8, 1.0);
-    // Wheels.
     for side in [-1.0, 1.0] {
         draw_circle(c.x + side * s * 0.22, c.y + s * 0.34, s * 0.1, DARKGRAY);
     }
-    // Antenna with a bobbing light.
     let bob = (time * 4.0).sin() * s * 0.02;
     draw_line(
         c.x,
@@ -178,7 +316,6 @@ fn draw_robot(c: Vec2, cell: f32, face: Face, look: Vec2, time: f32, lift: f32) 
         trim,
     );
     draw_circle(c.x, c.y - s * 0.48 + bob, s * 0.07, RED);
-    // Body and face screen.
     rounded_rect(
         c.x - s * 0.38,
         c.y - s * 0.32,
@@ -195,16 +332,14 @@ fn draw_robot(c: Vec2, cell: f32, face: Face, look: Vec2, time: f32, lift: f32) 
         s * 0.12,
         body,
     );
-    let screen = Color::new(0.15, 0.2, 0.32, 1.0);
     rounded_rect(
         c.x - s * 0.27,
         c.y - s * 0.2,
         s * 0.54,
         s * 0.38,
         s * 0.08,
-        screen,
+        INK,
     );
-    // Eyes (blink now and then).
     let blink = (time % 3.7) < 0.12;
     for side in [-1.0, 1.0] {
         let eye = vec2(c.x + side * s * 0.12, c.y - s * 0.06);
@@ -220,7 +355,7 @@ fn draw_robot(c: Vec2, cell: f32, face: Face, look: Vec2, time: f32, lift: f32) 
         } else {
             draw_circle(eye.x, eye.y, s * 0.075, WHITE);
             let pupil = eye + look * s * 0.03;
-            draw_circle(pupil.x, pupil.y, s * 0.038, screen);
+            draw_circle(pupil.x, pupil.y, s * 0.038, INK);
         }
     }
     let mouth = Color::new(0.4, 1.0, 0.6, 1.0);
@@ -263,15 +398,13 @@ fn draw_undo_icon(c: Vec2, r: f32) {
         c.y - r * 0.35,
         c.y + r * 0.35,
     );
-    let tip = vec2(l, c.y);
     let body_left = l + r * 0.3;
-    draw_triangle(tip, vec2(body_left, t), vec2(body_left, b), WHITE);
+    draw_triangle(vec2(l, c.y), vec2(body_left, t), vec2(body_left, b), WHITE);
     draw_rectangle(body_left, t, rt - body_left, b - t, WHITE);
     let x = vec2(body_left + (rt - body_left) * 0.5, c.y);
     let k = r * 0.15;
-    let col = Color::new(0.95, 0.7, 0.1, 1.0);
-    draw_line(x.x - k, x.y - k, x.x + k, x.y + k, r * 0.1, col);
-    draw_line(x.x - k, x.y + k, x.x + k, x.y - k, r * 0.1, col);
+    draw_line(x.x - k, x.y - k, x.x + k, x.y + k, r * 0.1, UNDO_YELLOW);
+    draw_line(x.x - k, x.y + k, x.x + k, x.y - k, r * 0.1, UNDO_YELLOW);
 }
 
 /// A trash can: throw the whole program away.
@@ -287,6 +420,18 @@ fn draw_trash_icon(c: Vec2, r: f32) {
     }
 }
 
+/// Four corner brackets: go full screen (or back).
+fn draw_fullscreen_icon(c: Vec2, r: f32, color: Color) {
+    let k = r * 0.55;
+    let l = r * 0.35;
+    let t = r * 0.14;
+    for (sx, sy) in [(-1.0, -1.0), (1.0, -1.0), (-1.0, 1.0), (1.0, 1.0)] {
+        let corner = c + vec2(sx * k, sy * k);
+        draw_line(corner.x, corner.y, corner.x - sx * l, corner.y, t, color);
+        draw_line(corner.x, corner.y, corner.x, corner.y - sy * l, t, color);
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Buttons
 // ---------------------------------------------------------------------------
@@ -294,32 +439,27 @@ fn draw_trash_icon(c: Vec2, r: f32) {
 #[derive(Clone, Copy, PartialEq)]
 enum Button {
     Arrow(Dir),
+    Axe,
+    Repeat,
     Play,
     Undo,
     Clear,
+    Fullscreen,
 }
 
 /// Each button with its centre and half-size.
-const BUTTONS: [(Button, Vec2, f32); 7] = [
-    (Button::Arrow(Dir::Up), vec2(1020.0, 160.0), 46.0),
-    (Button::Arrow(Dir::Left), vec2(932.0, 250.0), 46.0),
-    (Button::Arrow(Dir::Right), vec2(1108.0, 250.0), 46.0),
-    (Button::Arrow(Dir::Down), vec2(1020.0, 340.0), 46.0),
-    (Button::Play, vec2(1020.0, 510.0), 70.0),
-    (Button::Undo, vec2(950.0, 680.0), 45.0),
-    (Button::Clear, vec2(1090.0, 680.0), 45.0),
+const BUTTONS: [(Button, Vec2, f32); 10] = [
+    (Button::Arrow(Dir::Up), vec2(1256.0, 130.0), 42.0),
+    (Button::Arrow(Dir::Left), vec2(1166.0, 215.0), 42.0),
+    (Button::Arrow(Dir::Right), vec2(1346.0, 215.0), 42.0),
+    (Button::Arrow(Dir::Down), vec2(1256.0, 300.0), 42.0),
+    (Button::Axe, vec2(1186.0, 412.0), 42.0),
+    (Button::Repeat, vec2(1326.0, 412.0), 42.0),
+    (Button::Play, vec2(1256.0, 572.0), 64.0),
+    (Button::Undo, vec2(1186.0, 728.0), 40.0),
+    (Button::Clear, vec2(1326.0, 728.0), 40.0),
+    (Button::Fullscreen, vec2(1386.0, 36.0), 22.0),
 ];
-
-fn slot_rect(i: usize) -> Rect {
-    let col = (i % SLOTS_PER_ROW) as f32;
-    let row = (i / SLOTS_PER_ROW) as f32;
-    Rect::new(
-        STRIP_X + col * (SLOT + SLOT_GAP),
-        STRIP_Y + row * (SLOT + SLOT_GAP),
-        SLOT,
-        SLOT,
-    )
-}
 
 // ---------------------------------------------------------------------------
 // Game state
@@ -329,11 +469,13 @@ fn slot_rect(i: usize) -> Rect {
 enum Mode {
     /// Building the program.
     Edit,
-    /// Walking one step of the program.
+    /// Walking one step.
     Moving,
-    /// Walked into a tree or the edge.
+    /// Chopping down a tree.
+    Chopping,
+    /// Walked into something, or swung the axe at something that isn't a tree.
     Bump,
-    /// Program finished (or bumped) without getting every star.
+    /// Program finished (or got stuck) without getting every star.
     Sad,
     /// All stars collected!
     Win,
@@ -353,41 +495,49 @@ struct Game {
     levels: Vec<Level>,
     idx: usize,
     solved: Vec<bool>,
-    program: Vec<Dir>,
+    program: Vec<Block>,
+    /// The axe was tapped; the next arrow makes a chop block.
+    axe_armed: bool,
+    world: World,
     mode: Mode,
     timer: f32,
+    /// Which block is running, and which repetition of it.
     step: usize,
-    pos: Pos,
-    from: Pos,
-    stars: Vec<Pos>,
+    rep: u8,
+    /// What the robot is doing right now, for animation.
+    event: Option<Event>,
+    facing: Dir,
     failed_step: Option<usize>,
     particles: Vec<Particle>,
     pressed: Option<(Button, f32)>,
     time: f32,
+    fullscreen: bool,
 }
 
 impl Game {
-    fn new() -> Game {
+    fn new(fullscreen: bool) -> Game {
         let levels = level::all_levels();
         let solved = vec![false; levels.len()];
-        let mut game = Game {
+        let world = levels[0].world();
+        Game {
             levels,
             idx: 0,
             solved,
             program: Vec::new(),
+            axe_armed: false,
+            world,
             mode: Mode::Edit,
             timer: 0.0,
             step: 0,
-            pos: (0, 0),
-            from: (0, 0),
-            stars: Vec::new(),
+            rep: 0,
+            event: None,
+            facing: Dir::Right,
             failed_step: None,
             particles: Vec::new(),
             pressed: None,
             time: 0.0,
-        };
-        game.load(0);
-        game
+            fullscreen,
+        }
     }
 
     fn level(&self) -> &Level {
@@ -398,14 +548,21 @@ impl Game {
         self.idx = idx;
         self.program.clear();
         self.particles.clear();
+        self.axe_armed = false;
+        self.failed_step = None;
         self.reset_robot();
     }
 
+    fn next_level(&mut self) {
+        self.load((self.idx + 1) % self.levels.len());
+    }
+
     fn reset_robot(&mut self) {
-        self.pos = self.level().start;
-        self.from = self.pos;
-        self.stars = self.level().stars.clone();
+        self.world = self.level().world();
+        self.facing = Dir::Right;
+        self.event = None;
         self.step = 0;
+        self.rep = 0;
         self.set_mode(Mode::Edit);
     }
 
@@ -414,74 +571,138 @@ impl Game {
         self.timer = 0.0;
     }
 
-    fn press(&mut self, button: Button) {
-        self.pressed = Some((button, self.time));
-        let editing = self.mode == Mode::Edit;
+    fn running(&self) -> bool {
+        matches!(
+            self.mode,
+            Mode::Moving | Mode::Chopping | Mode::Bump | Mode::Sad
+        )
+    }
+
+    fn has_room(&self) -> bool {
+        self.program.len() < self.level().slots
+    }
+
+    fn visible(&self, button: Button) -> bool {
         match button {
-            Button::Arrow(dir) if editing && self.program.len() < MAX_PROGRAM => {
-                self.program.push(dir);
-                self.failed_step = None;
-            }
-            Button::Undo if editing => {
-                self.program.pop();
-                self.failed_step = None;
-            }
-            Button::Clear if editing => {
-                self.program.clear();
-                self.failed_step = None;
-            }
-            Button::Play if editing && !self.program.is_empty() => self.run(),
-            Button::Play if matches!(self.mode, Mode::Moving | Mode::Bump | Mode::Sad) => {
-                self.reset_robot()
-            }
-            _ => {}
+            Button::Axe => self.level().chop,
+            Button::Repeat => self.level().repeat,
+            _ => true,
         }
     }
 
-    fn run(&mut self) {
-        self.reset_robot();
-        self.failed_step = None;
-        self.begin_step();
+    fn enabled(&self, button: Button) -> bool {
+        let editing = self.mode == Mode::Edit;
+        match button {
+            Button::Arrow(_) | Button::Axe => editing && self.has_room(),
+            Button::Repeat | Button::Clear => editing && !self.program.is_empty(),
+            Button::Undo => editing && (self.axe_armed || !self.program.is_empty()),
+            Button::Play => self.running() || (editing && !self.program.is_empty()),
+            Button::Fullscreen => true,
+        }
     }
 
-    fn begin_step(&mut self) {
-        let Some(&dir) = self.program.get(self.step) else {
-            // Ran out of steps with stars still left.
+    fn press(&mut self, button: Button) {
+        if !self.visible(button) || !self.enabled(button) {
+            return;
+        }
+        self.pressed = Some((button, self.time));
+        if button != Button::Fullscreen {
+            self.failed_step = None;
+        }
+        match button {
+            Button::Arrow(dir) => {
+                let cmd = if self.axe_armed {
+                    Cmd::Chop(dir)
+                } else {
+                    Cmd::Move(dir)
+                };
+                self.program.push(Block { cmd, times: 1 });
+                self.axe_armed = false;
+            }
+            Button::Axe => self.axe_armed = !self.axe_armed,
+            Button::Repeat => {
+                if let Some(last) = self.program.last_mut() {
+                    last.times = last.times % MAX_TIMES + 1;
+                }
+            }
+            Button::Undo if self.axe_armed => self.axe_armed = false,
+            Button::Undo => {
+                self.program.pop();
+            }
+            Button::Clear => {
+                self.program.clear();
+                self.axe_armed = false;
+            }
+            Button::Play if self.running() => self.reset_robot(),
+            Button::Play => {
+                self.axe_armed = false;
+                self.reset_robot();
+                self.act();
+            }
+            Button::Fullscreen => {
+                self.fullscreen = !self.fullscreen;
+                set_fullscreen(self.fullscreen);
+            }
+        }
+    }
+
+    /// Start the current repetition of the current block.
+    fn act(&mut self) {
+        let Some(block) = self.program.get(self.step).copied() else {
+            // Ran out of blocks with stars still left.
             self.set_mode(Mode::Sad);
             return;
         };
-        match self.level().step(self.pos, dir) {
-            Some(next) => {
-                self.from = self.pos;
-                self.pos = next;
-                self.set_mode(Mode::Moving);
+        self.facing = block.cmd.dir();
+        match self.world.act(block.cmd) {
+            Ok(event) => {
+                self.event = Some(event);
+                self.set_mode(match event {
+                    Event::Moved { .. } => Mode::Moving,
+                    Event::Chopped(_) => Mode::Chopping,
+                });
             }
-            None => {
+            Err(()) => {
                 self.failed_step = Some(self.step);
                 self.set_mode(Mode::Bump);
             }
         }
     }
 
+    /// The current action has finished: celebrate, or carry on with the program.
+    fn finish_action(&mut self) {
+        match self.event {
+            Some(Event::Moved { star: true, .. }) => {
+                let (c, cell) = self.cell_centre(self.world.pos);
+                self.burst(c, cell, STAR, true);
+            }
+            Some(Event::Chopped(p)) => {
+                let (c, cell) = self.cell_centre(p);
+                self.burst(c - vec2(0.0, cell * 0.2), cell, LEAF, false);
+            }
+            _ => {}
+        }
+        self.event = None;
+        if self.world.stars.is_empty() {
+            self.solved[self.idx] = true;
+            self.set_mode(Mode::Win);
+            self.confetti();
+            return;
+        }
+        self.rep += 1;
+        if self.rep >= self.program[self.step].times {
+            self.step += 1;
+            self.rep = 0;
+        }
+        self.act();
+    }
+
     fn update(&mut self, dt: f32) {
         self.time += dt;
         self.timer += dt;
         match self.mode {
-            Mode::Moving if self.timer >= STEP_TIME => {
-                if let Some(i) = self.stars.iter().position(|&s| s == self.pos) {
-                    self.stars.remove(i);
-                    let (centre, cell) = self.cell_centre(self.pos);
-                    self.burst(centre, cell);
-                }
-                if self.stars.is_empty() {
-                    self.solved[self.idx] = true;
-                    self.set_mode(Mode::Win);
-                    self.confetti();
-                } else {
-                    self.step += 1;
-                    self.begin_step();
-                }
-            }
+            Mode::Moving if self.timer >= STEP_TIME => self.finish_action(),
+            Mode::Chopping if self.timer >= CHOP_TIME => self.finish_action(),
             Mode::Bump if self.timer >= BUMP_TIME => self.set_mode(Mode::Sad),
             Mode::Sad if self.timer >= SAD_TIME => self.reset_robot(),
             Mode::Win if self.timer > 1.5 && (self.timer % 1.2) < dt => self.confetti(),
@@ -499,21 +720,24 @@ impl Game {
     }
 
     fn handle_click(&mut self, m: Vec2) {
-        if self.mode == Mode::Win {
-            if self.timer > 0.8 {
-                self.load((self.idx + 1) % self.levels.len());
-            }
-            return;
-        }
         for (button, centre, half) in BUTTONS {
-            if (m - centre).abs().max_element() <= half {
+            if self.visible(button) && (m - centre).abs().max_element() <= half {
+                if self.mode == Mode::Win && button != Button::Fullscreen {
+                    break;
+                }
                 self.press(button);
                 return;
             }
         }
-        // Tap a step in the program to take it out.
+        if self.mode == Mode::Win {
+            if self.timer > 0.8 {
+                self.next_level();
+            }
+            return;
+        }
+        // Tap a block in the program to take it out.
         if self.mode == Mode::Edit
-            && let Some(i) = (0..self.program.len()).find(|&i| slot_rect(i).contains(m))
+            && let Some(i) = (0..self.program.len()).find(|&i| self.slot_rect(i).contains(m))
         {
             self.program.remove(i);
             self.failed_step = None;
@@ -526,11 +750,26 @@ impl Game {
     }
 
     fn handle_keys(&mut self) {
+        if is_key_pressed(KeyCode::F11) || (is_key_pressed(KeyCode::Escape) && self.fullscreen) {
+            self.press(Button::Fullscreen);
+        }
+        let typed = get_char_pressed();
+        if self.mode == Mode::Win {
+            if [KeyCode::Space, KeyCode::Enter, KeyCode::Right]
+                .into_iter()
+                .any(is_key_pressed)
+            {
+                self.next_level();
+            }
+            return;
+        }
         let keys = [
             (KeyCode::Up, Button::Arrow(Dir::Up)),
             (KeyCode::Down, Button::Arrow(Dir::Down)),
             (KeyCode::Left, Button::Arrow(Dir::Left)),
             (KeyCode::Right, Button::Arrow(Dir::Right)),
+            (KeyCode::C, Button::Axe),
+            (KeyCode::R, Button::Repeat),
             (KeyCode::Space, Button::Play),
             (KeyCode::Enter, Button::Play),
             (KeyCode::Backspace, Button::Undo),
@@ -538,12 +777,17 @@ impl Game {
         ];
         for (key, button) in keys {
             if is_key_pressed(key) {
-                if self.mode == Mode::Win {
-                    self.load((self.idx + 1) % self.levels.len());
-                } else {
-                    self.press(button);
-                }
+                self.press(button);
             }
+        }
+        // Number keys set how many times the last block repeats.
+        if let Some(n) = typed.and_then(|ch| ch.to_digit(10))
+            && n >= 1
+            && self.visible(Button::Repeat)
+            && self.enabled(Button::Repeat)
+            && let Some(last) = self.program.last_mut()
+        {
+            last.times = n as u8;
         }
     }
 
@@ -558,36 +802,47 @@ impl Game {
 
     fn grid_origin(&self) -> Vec2 {
         let l = self.level();
-        let cell = self.cell_size();
-        BOARD.center() - vec2(l.w as f32, l.h as f32) * cell / 2.0
+        BOARD.center() - vec2(l.w as f32, l.h as f32) * self.cell_size() / 2.0
     }
 
-    /// Centre of a grid position (fractional positions allowed) and the cell size.
     fn cell_centre_f(&self, p: Vec2) -> Vec2 {
         self.grid_origin() + (p + vec2(0.5, 0.5)) * self.cell_size()
     }
 
-    fn cell_centre(&self, (x, y): Pos) -> (Vec2, f32) {
-        (
-            self.cell_centre_f(vec2(x as f32, y as f32)),
-            self.cell_size(),
+    fn cell_centre(&self, p: Pos) -> (Vec2, f32) {
+        (self.cell_centre_f(pos_vec(p)), self.cell_size())
+    }
+
+    fn strip_cols(&self) -> usize {
+        self.level().slots.min(SLOTS_PER_ROW)
+    }
+
+    fn slot_rect(&self, i: usize) -> Rect {
+        let cols = self.strip_cols();
+        let width = cols as f32 * (SLOT + SLOT_GAP) - SLOT_GAP;
+        let x0 = BOARD.center().x - width / 2.0;
+        Rect::new(
+            x0 + (i % cols) as f32 * (SLOT + SLOT_GAP),
+            STRIP_Y + (i / cols) as f32 * (SLOT + SLOT_GAP),
+            SLOT,
+            SLOT,
         )
     }
 
     // --- effects --------------------------------------------------------
 
-    fn burst(&mut self, at: Vec2, cell: f32) {
+    fn burst(&mut self, at: Vec2, cell: f32, color: Color, star: bool) {
         for _ in 0..24 {
             let a = gen_range(0.0, 2.0 * PI);
             let speed = gen_range(150.0, 400.0);
             self.particles.push(Particle {
                 pos: at,
                 vel: vec2(a.cos(), a.sin()) * speed - vec2(0.0, 150.0),
-                color: STAR,
+                color,
                 life: gen_range(0.5, 1.0),
                 size: cell * gen_range(0.06, 0.12),
-                spin: 0.0,
-                star: true,
+                spin: gen_range(0.0, PI),
+                star,
             });
         }
     }
@@ -622,8 +877,13 @@ impl Game {
                 let (s, c) = p.spin.sin_cos();
                 let d = vec2(c, s) * p.size;
                 let n = vec2(-d.y, d.x) * 0.5;
-                draw_triangle(p.pos - d - n, p.pos + d - n, p.pos + d + n, p.color);
-                draw_triangle(p.pos - d - n, p.pos + d + n, p.pos - d + n, p.color);
+                draw_quad(
+                    p.pos - d - n,
+                    p.pos + d - n,
+                    p.pos + d + n,
+                    p.pos - d + n,
+                    p.color,
+                );
             }
         }
         if self.mode == Mode::Win && self.timer > 0.8 {
@@ -636,20 +896,12 @@ impl Game {
             let c = level_dot(i);
             if i == self.idx {
                 draw_circle(c.x, c.y, 22.0, WHITE);
-                draw_circle(c.x, c.y, 19.0, Color::new(0.25, 0.55, 0.95, 1.0));
-                let label = format!("{}", i + 1);
-                let size = measure_text(&label, None, 30, 1.0);
-                draw_text(
-                    &label,
-                    c.x - size.width / 2.0,
-                    c.y + size.offset_y / 2.0,
-                    30.0,
-                    WHITE,
-                );
+                draw_circle(c.x, c.y, 19.0, dir_color(Dir::Up));
+                draw_label(&format!("{}", i + 1), c, 26.0, WHITE);
             } else if self.solved[i] {
-                draw_star(c, 18.0, 0.0, STAR);
+                draw_star(c, 17.0, 0.0, STAR);
             } else {
-                draw_circle(c.x, c.y, 12.0, Color::new(1.0, 1.0, 1.0, 0.7));
+                draw_circle(c.x, c.y, 11.0, Color::new(1.0, 1.0, 1.0, 0.7));
             }
         }
     }
@@ -690,15 +942,41 @@ impl Game {
             Color::new(1.0, 1.0, 1.0, 0.6),
         );
 
+        let chopping = match (self.mode, self.event) {
+            (Mode::Chopping, Some(Event::Chopped(p))) => Some(p),
+            _ => None,
+        };
         for y in 0..l.h {
             for x in 0..l.w {
-                if l.is_wall((x, y)) {
-                    draw_tree(self.cell_centre((x, y)).0, cell);
+                let c = self.cell_centre((x, y)).0;
+                match self.world.tile((x, y)) {
+                    Some(Tile::Tree) => draw_tree(c, cell, 1.0, 0.0),
+                    Some(Tile::Rock) => draw_rock(c, cell),
+                    Some(Tile::Stump) if chopping == Some((x, y)) => {
+                        // Wobble with each axe hit, then topple over.
+                        let t = self.timer / CHOP_TIME;
+                        draw_stump(c, cell);
+                        if t < 0.6 {
+                            draw_tree(c, cell, 1.0, (t * 30.0).sin() * 0.08);
+                        } else {
+                            let fall = (t - 0.6) / 0.4;
+                            let side = if self.facing == Dir::Left { -1.0 } else { 1.0 };
+                            draw_tree(c, cell, 1.0 - fall, side * fall * 1.2);
+                        }
+                    }
+                    Some(Tile::Stump) => draw_stump(c, cell),
+                    _ => {}
                 }
             }
         }
+
         // Stars bob gently; leftover stars wiggle when the robot is sad.
-        for (i, &s) in self.stars.iter().enumerate() {
+        // A star being driven onto stays until the robot arrives.
+        let arriving = match (self.mode, self.event) {
+            (Mode::Moving, Some(Event::Moved { star: true, .. })) => Some(self.world.pos),
+            _ => None,
+        };
+        for (i, &s) in self.world.stars.iter().chain(&arriving).enumerate() {
             let (c, _) = self.cell_centre(s);
             let bob = (self.time * 3.0 + i as f32).sin() * cell * 0.04;
             let wiggle = if self.mode == Mode::Sad {
@@ -714,18 +992,17 @@ impl Game {
 
     fn draw_robot(&self) {
         let cell = self.cell_size();
-        let pos = vec2(self.pos.0 as f32, self.pos.1 as f32);
-        let current_dir = self.program.get(self.step).copied();
-        let look = current_dir.map(dir_vec).unwrap_or(Vec2::ZERO);
-        let (at, lift, face) = match self.mode {
-            Mode::Moving => {
+        let pos = pos_vec(self.world.pos);
+        let look = dir_vec(self.facing);
+        let (at, lift, face) = match (self.mode, self.event) {
+            (Mode::Moving, Some(Event::Moved { from, .. })) => {
                 let t = (self.timer / STEP_TIME).min(1.0);
                 let eased = t * t * (3.0 - 2.0 * t);
-                let from = vec2(self.from.0 as f32, self.from.1 as f32);
                 let hop = (t * PI).sin() * cell * 0.15;
-                (from.lerp(pos, eased), hop, Face::Happy)
+                (pos_vec(from).lerp(pos, eased), hop, Face::Happy)
             }
-            Mode::Bump => {
+            (Mode::Chopping, _) => (pos, 0.0, Face::Happy),
+            (Mode::Bump, _) => {
                 let t = self.timer / BUMP_TIME;
                 let lunge = (t * 3.0).min(1.0) * PI;
                 let shake = (self.time * 50.0).sin() * 0.04 * (1.0 - t);
@@ -735,38 +1012,80 @@ impl Game {
                     Face::Sad,
                 )
             }
-            Mode::Sad => (pos, 0.0, Face::Sad),
-            Mode::Win => {
+            (Mode::Sad, _) => (pos, 0.0, Face::Sad),
+            (Mode::Win, _) => {
                 let hop = (self.timer * 8.0).sin().abs() * cell * 0.25;
                 (pos, hop, Face::Happy)
             }
-            Mode::Edit => (pos, 0.0, Face::Calm),
+            _ => (pos, 0.0, Face::Calm),
         };
         let c = self.cell_centre_f(at) - vec2(0.0, lift);
         draw_robot(c, cell, face, look, self.time, lift);
+
+        // Swing the axe while chopping (or while trying to chop something
+        // that isn't a tree).
+        let failed_chop = self.mode == Mode::Bump
+            && self
+                .failed_step
+                .and_then(|i| self.program.get(i))
+                .is_some_and(|b| matches!(b.cmd, Cmd::Chop(_)));
+        if self.mode == Mode::Chopping || failed_chop {
+            let swing = (self.time * 25.0).sin() * 0.5;
+            draw_axe(
+                c + look * cell * 0.45,
+                cell * 0.45,
+                self.facing,
+                swing,
+                WOOD,
+            );
+        }
+    }
+
+    fn block_colour(cmd: Cmd) -> Color {
+        match cmd {
+            Cmd::Move(dir) => dir_color(dir),
+            Cmd::Chop(_) => AXE_BROWN,
+        }
+    }
+
+    fn draw_block(r: Rect, block: Block, colour: Color, badge: Option<u8>) {
+        rounded_rect(r.x, r.y + 4.0, r.w, r.h, 12.0, darker(colour, 0.7));
+        rounded_rect(r.x, r.y, r.w, r.h, 12.0, colour);
+        match block.cmd {
+            Cmd::Move(dir) => draw_arrow(r.center(), r.w * 0.8, dir, WHITE),
+            Cmd::Chop(dir) => draw_chop_icon(r.center(), r.w, dir),
+        }
+        if let Some(n) = badge {
+            let c = vec2(r.x + r.w - 4.0, r.y + 4.0);
+            draw_circle(c.x, c.y, 15.0, INK);
+            draw_circle(c.x, c.y, 13.0, WHITE);
+            draw_label(&format!("{n}"), c, 24.0, INK);
+        }
     }
 
     fn draw_program(&self) {
-        let rows = MAX_PROGRAM.div_ceil(SLOTS_PER_ROW) as f32;
+        let slots = self.level().slots;
+        let first = self.slot_rect(0);
+        let last = self.slot_rect(slots - 1);
+        let right = self.slot_rect(self.strip_cols() - 1);
         rounded_rect(
-            STRIP_X - 12.0,
-            STRIP_Y - 12.0,
-            SLOTS_PER_ROW as f32 * (SLOT + SLOT_GAP) - SLOT_GAP + 24.0,
-            rows * (SLOT + SLOT_GAP) - SLOT_GAP + 24.0,
+            first.x - 12.0,
+            first.y - 12.0,
+            right.right() - first.x + 24.0,
+            last.bottom() - first.y + 24.0,
             20.0,
             PANEL,
         );
-        let running = matches!(self.mode, Mode::Moving | Mode::Bump);
-        for i in 0..MAX_PROGRAM {
-            let r = slot_rect(i);
-            let Some(&dir) = self.program.get(i) else {
+        let running = matches!(self.mode, Mode::Moving | Mode::Chopping | Mode::Bump);
+        for i in 0..slots {
+            let mut r = self.slot_rect(i);
+            let Some(&block) = self.program.get(i) else {
                 rounded_rect(r.x, r.y, r.w, r.h, 12.0, SLOT_EMPTY);
                 continue;
             };
             let active = running && i == self.step;
             let failed = self.failed_step == Some(i);
             let done = running && i < self.step;
-            let mut r = r;
             if active {
                 r.y -= 6.0;
             }
@@ -777,61 +1096,85 @@ impl Game {
                 let ring = if failed { STOP_RED } else { WHITE };
                 rounded_rect(r.x - 5.0, r.y - 5.0, r.w + 10.0, r.h + 10.0, 16.0, ring);
             }
-            let mut colour = dir_color(dir);
+            let mut colour = Self::block_colour(block.cmd);
             if done {
                 colour = mix(colour, PANEL, 0.55);
             }
-            rounded_rect(r.x, r.y + 4.0, r.w, r.h, 12.0, darker(colour, 0.7));
-            rounded_rect(r.x, r.y, r.w, r.h, 12.0, colour);
-            draw_arrow(r.center(), r.w * 0.8, dir, WHITE);
+            // While a repeated block runs, its number counts down.
+            let left = if active {
+                block.times - self.rep
+            } else {
+                block.times
+            };
+            let badge = (block.times > 1).then_some(left);
+            Self::draw_block(r, block, colour, badge);
         }
     }
 
     fn draw_buttons(&self) {
-        rounded_rect(870.0, 70.0, 300.0, 370.0, 30.0, PANEL);
-        let running = matches!(self.mode, Mode::Moving | Mode::Bump | Mode::Sad);
+        let tools = self.level().chop || self.level().repeat;
+        let panel_h = if tools { 400.0 } else { 300.0 };
+        rounded_rect(1110.0, 70.0, 292.0, panel_h, 30.0, PANEL);
         for (button, c, half) in BUTTONS {
+            if !self.visible(button) {
+                continue;
+            }
             let squash = match self.pressed {
                 Some((b, t)) if b == button && self.time - t < 0.12 => 0.9,
                 _ => 1.0,
             };
             let half = half * squash;
+            let enabled = self.enabled(button);
             let (colour, round) = match button {
                 Button::Arrow(dir) => (dir_color(dir), 18.0),
-                Button::Play if running => (STOP_RED, half),
+                Button::Axe => (AXE_BROWN, 18.0),
+                Button::Repeat => (REPEAT_TEAL, 18.0),
+                Button::Play if self.running() => (STOP_RED, half),
                 Button::Play => (PLAY_GREEN, half),
-                Button::Undo => (Color::new(0.95, 0.7, 0.1, 1.0), 18.0),
+                Button::Undo => (UNDO_YELLOW, 18.0),
                 Button::Clear => (STOP_RED, 18.0),
+                Button::Fullscreen => (PANEL, 10.0),
             };
-            let editing = self.mode == Mode::Edit;
-            let enabled = match button {
-                Button::Arrow(_) => editing && self.program.len() < MAX_PROGRAM,
-                Button::Undo | Button::Clear => editing && !self.program.is_empty(),
-                Button::Play => running || (editing && !self.program.is_empty()),
-            };
-            let colour = if enabled {
-                colour
-            } else {
-                Color::new(0.75, 0.78, 0.82, 1.0)
-            };
+            let colour = if enabled { colour } else { DISABLED };
             let size = half * 2.0;
-            rounded_rect(
-                c.x - half,
-                c.y - half + 6.0,
-                size,
-                size,
-                round,
-                darker(colour, 0.7),
-            );
+            // The armed axe glows to say "now pick which way to chop".
+            if button == Button::Axe && self.axe_armed {
+                let g = 6.0 + ((self.time * 6.0).sin() * 0.5 + 0.5) * 4.0;
+                rounded_rect(
+                    c.x - half - g,
+                    c.y - half - g,
+                    size + 2.0 * g,
+                    size + 2.0 * g,
+                    round + g,
+                    STAR,
+                );
+            }
+            if button != Button::Fullscreen {
+                rounded_rect(
+                    c.x - half,
+                    c.y - half + 6.0,
+                    size,
+                    size,
+                    round,
+                    darker(colour, 0.7),
+                );
+            }
             rounded_rect(c.x - half, c.y - half, size, size, round, colour);
             match button {
+                Button::Arrow(dir) if self.axe_armed => draw_chop_icon(c, size, dir),
                 Button::Arrow(dir) => draw_arrow(c, size * 0.8, dir, WHITE),
-                Button::Play if running => {
+                Button::Axe => draw_axe_badge(c, size * 0.75),
+                Button::Repeat => {
+                    draw_loop_icon(c, half, WHITE);
+                    // Show what the next tap will make the last block.
+                    let next = self.program.last().map_or(2, |b| b.times % MAX_TIMES + 1);
+                    draw_label(&format!("{next}"), c, 28.0, WHITE);
+                }
+                Button::Play if self.running() => {
                     let s = half * 0.38;
                     draw_rectangle(c.x - s, c.y - s, s * 2.0, s * 2.0, WHITE)
                 }
                 Button::Play => {
-                    // Pulse to say "press me!" once there's a program to run.
                     if enabled {
                         let pulse = (self.time * 4.0).sin() * 0.5 + 0.5;
                         draw_circle_lines(
@@ -846,12 +1189,13 @@ impl Game {
                 }
                 Button::Undo => draw_undo_icon(c, half),
                 Button::Clear => draw_trash_icon(c, half),
+                Button::Fullscreen => draw_fullscreen_icon(c, half, INK),
             }
         }
     }
 
     fn draw_next_prompt(&self) {
-        let c = vec2(BOARD.center().x, BOARD.center().y);
+        let c = BOARD.center();
         let pulse = 1.0 + (self.time * 5.0).sin() * 0.06;
         let r = 70.0 * pulse;
         draw_circle(c.x, c.y + 6.0, r, darker(PLAY_GREEN, 0.7));
@@ -860,8 +1204,19 @@ impl Game {
     }
 }
 
+/// "Chop that way": an arrow with a little axe tucked in the corner.
+fn draw_chop_icon(c: Vec2, size: f32, dir: Dir) {
+    draw_arrow(c + vec2(0.08, 0.08) * size, size * 0.62, dir, WHITE);
+    draw_axe_badge(c - vec2(0.24, 0.24) * size, size * 0.42);
+}
+
+/// The axe as drawn on the axe button, for use as a small badge.
+fn draw_axe_badge(c: Vec2, size: f32) {
+    draw_axe(c, size, Dir::Left, -0.5, WHITE);
+}
+
 fn level_dot(i: usize) -> Vec2 {
-    vec2(50.0 + i as f32 * 56.0, 36.0)
+    vec2(40.0 + i as f32 * 52.0, 36.0)
 }
 
 /// A camera that maps the fixed W x H canvas onto the window, letterboxed.
@@ -875,12 +1230,18 @@ fn fit_camera() -> Camera2D {
     }
 }
 
+/// Start full screen unless run with `--window`.
+fn start_fullscreen() -> bool {
+    !std::env::args().any(|a| a == "--window")
+}
+
 fn window_conf() -> Conf {
     Conf {
         window_title: "Robot Steps".to_owned(),
-        window_width: 1200,
+        window_width: 1422,
         window_height: 800,
         window_resizable: true,
+        fullscreen: start_fullscreen(),
         sample_count: 4,
         ..Default::default()
     }
@@ -889,7 +1250,7 @@ fn window_conf() -> Conf {
 #[macroquad::main(window_conf)]
 async fn main() {
     rand::srand(miniquad::date::now() as u64);
-    let mut game = Game::new();
+    let mut game = Game::new(start_fullscreen());
     loop {
         let camera = fit_camera();
         set_camera(&camera);
