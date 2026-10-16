@@ -624,7 +624,7 @@ impl Game {
         // Carry on from the first level not finished yet.
         let idx = solved.iter().position(|&done| !done).unwrap_or(0);
         let world = levels[idx].world();
-        Game {
+        let mut game = Game {
             levels,
             idx,
             solved,
@@ -643,7 +643,11 @@ impl Game {
             pressed: None,
             time: 0.0,
             fullscreen,
-        }
+        };
+        // Set the level up properly (its function strips, and so on), the
+        // same way as choosing it from the level dots.
+        game.load(idx);
+        game
     }
 
     fn level(&self) -> &Level {
