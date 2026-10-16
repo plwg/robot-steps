@@ -430,6 +430,81 @@ pub const LEVELS: &[LevelDef] = &[
     level(&["*@@*@*", ".@@.@.", "R.##.#"])
         .with_axe()
         .with_functions(6, 2, 3),
+    // --- Loops through the mystery clouds: check, then step ---
+    level(&["R?.?.?.?*"]).with_check().with_loops(3),
+    level(&["R?@@@", "@.?@@", "@@.?@", "@@@.?", "@@@@*"])
+        .with_check()
+        .with_loops(3),
+    // --- If, on paths that turn ---
+    level(&["R#@@@", "@..@@", "@@#.@", "@@@*#", "@@@@*"])
+        .with_axe()
+        .with_ifs(6, true, false),
+    level(&[
+        "R..@@@@@@",
+        "*@...@@@@",
+        "@@*@...@@",
+        "@@@@@@...",
+        "@@@@@@*@.",
+        "@@@@@@@@*",
+    ])
+    .with_ifs(5, false, true),
+    // --- Two functions, and functions with the axe and the clouds ---
+    level(&[
+        "@@@.*@@@@.*@@",
+        "@@....@@....@",
+        "#..##....##..",
+        "R.####*.####*",
+    ])
+    .with_functions(4, 2, 3),
+    level(&["R####", "@@@@*", "####.", "*@@@@", ".####", "@@@@*"])
+        .with_axe()
+        .with_functions(6, 2, 3),
+    level(&[
+        "R?...@@@@@@@@",
+        "@@@@.@@@@@@@@",
+        "@@@@..?*.@@@@",
+        "@@@@@@@@.@@@@",
+        "@@@@@@@@...?*",
+    ])
+    .with_check()
+    .with_functions(3, 1, 3),
+    // --- Functions with "if" blocks inside: one function looks around, and
+    // the main program says where ---
+    level(&["@**@*@", "R.....", "*@@*@.", "@@*@*.", "......", "@*@*@@"])
+        .with_ifs(5, false, true)
+        .with_functions(5, 1, 6),
+    level(&[
+        "@*@*@@@@@@@@@",
+        "R....@@@@@@@@",
+        "@@@@.@**@@@@@",
+        "@@@@.....@@@@",
+        "@@@@@@@@.*@*@",
+        "@@@@@@@@....*",
+    ])
+    .with_ifs(5, false, true)
+    .with_functions(5, 1, 4),
+    level(&[
+        "R.#*@@@@", "@@@#@@@@", "@@@..#@@", "@@@@@.@@", "@@@@@#@@", "@@@@@*#*",
+    ])
+    .with_axe()
+    .with_ifs(5, true, false)
+    .with_functions(5, 2, 3),
+    level(&["@*@**@*", "R.#.##.", "@@@@@@.", ".#.#...", "*@*@@*@"])
+        .with_axe()
+        .with_ifs(3, true, true)
+        .with_functions(3, 2, 6),
+    // --- Everything together ---
+    level(&[
+        "@@@@@@@..##.",
+        "@@@@@@@.@*@*",
+        "@@@..#.#@@@@",
+        "@@@.@@*@@@@@",
+        "R.#.@@@@@@@@",
+        "@*@*@@@@@@@@",
+    ])
+    .with_axe()
+    .with_ifs(5, true, true)
+    .with_functions(5, 2, 6),
 ];
 
 pub struct Level {
@@ -633,6 +708,8 @@ mod tests {
         (38, "[ R2 D ]3 R2"),
         (39, "[ U2 R2 D2 R2 ]2 U2 R2"),
         (40, "[ cR R2 ]4"),
+        (49, "[ ?R R2 ]4"),
+        (50, "[ ?R R D ]4"),
     ];
 
     /// Known solutions for the function levels: the main strip, then each
@@ -643,6 +720,20 @@ mod tests {
         (46, "f1 R f1 | [ R U ]3"),
         (47, "[ f1 ]3 | cR R U2 D2 R"),
         (48, "f1 f2 f2 f1 f2 f1 | U2 D2 R | cR R"),
+        (53, "f1 f2 f1 f2 | [ R U ]3 | [ R D ]3"),
+        (54, "f1 D2 f2 D2 f1 D | [ cR R ]4 | [ cL L ]4"),
+        (55, "[ f1 D2 ]3 | [ ?R R ]4"),
+        (56, "[ f1 R ]5 D3 [ f1 L ]5 | {sU U D } {sD D U }"),
+        (57, "f1 D2 f1 D2 f1 | [ {sU U D } R ]4"),
+        (
+            58,
+            "[ f1 ]3 [ f2 ]2 [ f1 ]2 [ f2 ]3 [ f1 ]2 | {tR cR } R | {tD cD } D",
+        ),
+        (
+            59,
+            "[ f1 ]6 D2 [ f2 ]6 | {tR cR } R {sU U D } | {tL cL } L {sD D U }",
+        ),
+        (60, "f1 f2 f1 f2 f1 | [ {tR cR } R {sD D U } ]3 | U2 R"),
     ];
 
     /// Known solutions for the "if" levels. `{tR` starts "if there's a tree to
@@ -651,6 +742,8 @@ mod tests {
         (41, "[ {tR cR } R ]9"),
         (42, "[ {sU U D } R ]8"),
         (43, "[ {tR cR } {sU U D } R ]8"),
+        (51, "[ {tR cR } R {tD cD } D ]4"),
+        (52, "[ {sD D U } R2 D ]5"),
     ];
 
     /// A whole program: strips separated by `|`.
@@ -944,7 +1037,10 @@ mod tests {
     fn if_levels_have_a_solution_that_fits() {
         let levels = all_levels();
         let if_levels: Vec<usize> = (1..=levels.len())
-            .filter(|&n| levels[n - 1].if_tree || levels[n - 1].if_star)
+            .filter(|&n| {
+                let l = &levels[n - 1];
+                (l.if_tree || l.if_star) && l.functions == 0
+            })
             .collect();
         let solved: Vec<usize> = IF_SOLUTIONS.iter().map(|&(n, _)| n).collect();
         assert_eq!(if_levels, solved, "every if level needs a solution");

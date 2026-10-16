@@ -10,7 +10,7 @@ stars. There's no reading required.
 |---|---|
 | ![Three players, each with their own robot and progress](docs/players.png) | ![Level 48: the main program calls the ● and ▲ functions, and the robot is partway through ▲, chopping a tree](docs/level.png) |
 
-Across 48 levels it introduces:
+Across 60 levels it introduces:
 
 - **Sequences:** up, down, left and right, in order
 - **Debugging:** when the robot bumps into something, the step that went wrong
