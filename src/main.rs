@@ -3585,7 +3585,7 @@ impl Game {
     fn draw_next_prompt(&self) {
         let c = self.board().center();
         // This run's blocks and turns, as a block and a clock, each with a
-        // gold star that pops in if it's a new best.
+        // trophy that pops in if it's a new best.
         if let Some((blocks, turns, new_blocks, new_turns)) = self.result {
             let card = Rect::new(c.x - 170.0, c.y - 180.0, 340.0, 80.0);
             rounded_rect(card.x, card.y + 5.0, card.w, card.h, 22.0, SHADOW);
@@ -3596,8 +3596,9 @@ impl Game {
                 icon(vec2(x, y));
                 draw_label_left(&n.to_string(), vec2(x + 26.0, y), 34.0, INK);
                 if new {
-                    let spin = (1.0 - pop) * 3.0;
-                    draw_star(vec2(x + 90.0, y), 20.0 * pop, spin, STAR);
+                    // Grows a little too big, then settles.
+                    let bounce = pop * (1.0 + (pop * PI).sin() * 0.3);
+                    draw_trophy(vec2(x + 90.0, y), 40.0 * bounce, STAR);
                 }
             };
             stat(card.x + 40.0, blocks, new_blocks, &|p| {
