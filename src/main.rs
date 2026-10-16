@@ -2931,11 +2931,7 @@ impl Game {
                     draw_bracket(r, c.x + size * 0.22, false, WHITE);
                 }
                 Button::Until => draw_until_icon(c, size, Dir::Right),
-                // The function's shape in a badge, like a count.
-                Button::Number => {
-                    draw_circle(c.x, c.y, half * 0.55, WHITE);
-                    draw_shape(c, half * 0.32, self.editing.max(1));
-                }
+                Button::Number => draw_number_icon(c, half, self.editing.max(1)),
                 Button::Loop => {
                     let r = Rect::new(c.x - half, c.y - half, size, size);
                     // While a loop is open, the button shows how to close it.
@@ -3185,6 +3181,12 @@ fn draw_until_icon(c: Vec2, size: f32, dir: Dir) {
     draw_sense(c - vec2(size * 0.16, size * 0.02), size * 0.55, Sense::Wall);
     draw_arrow(c + vec2(size * 0.24, size * 0.16), size * 0.4, dir, WHITE);
     draw_loop_icon(c + vec2(size * 0.24, -size * 0.2), size * 0.3, WHITE);
+}
+
+/// "The function's number": its shape in a badge, like a count.
+fn draw_number_icon(c: Vec2, half: f32, function: usize) {
+    draw_circle(c.x, c.y, half * 0.55, WHITE);
+    draw_shape(c, half * 0.32, function);
 }
 
 /// A count in a badge: a number, or for `NUMBER`, function `strip`'s shape.

@@ -65,9 +65,11 @@ to start a map, then pick a tile on the right (grass, tree, rock, ice, mystery
 cloud, key, door, star or the robot) and tap or drag across the map to paint
 it. Under the map, − and + change its width and height and how many slots
 the program has (and each function, when there are functions). The buttons
-under the tiles choose the blocks it allows: the axe, repeat, loops, the two
-"if" blocks and the two functions. Some bring others along, as in the game's
-own levels: loops need repeat, and "if" blocks and functions need loops.
+under the tiles choose the blocks it allows: the axe, repeat, loops, "repeat
+until", the two "if" blocks, "else", the two functions and numbers for them.
+Some bring others along, as in the game's own levels: loops need repeat;
+"if" blocks, "repeat until" and functions need loops; "else" needs an "if";
+and numbers need a function.
 Mystery clouds always come with the block that checks them.
 
 Press play to try the map out. The arrow at the top left goes back to

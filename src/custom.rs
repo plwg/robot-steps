@@ -20,22 +20,32 @@ pub enum Tool {
     Axe,
     Repeat,
     Loops,
+    /// "Repeat until there's a wall".
+    Until,
     IfTree,
     IfStar,
+    Else,
     /// The first function (●), and the second (▲).
     Fn1,
     Fn2,
+    /// Functions called with a number.
+    Numbers,
 }
 
 impl Tool {
-    pub const ALL: [Tool; 7] = [
+    /// In the order they're shown, and saved: each comes after the blocks it
+    /// needs.
+    pub const ALL: [Tool; 10] = [
         Tool::Axe,
         Tool::Repeat,
         Tool::Loops,
+        Tool::Until,
         Tool::IfTree,
         Tool::IfStar,
+        Tool::Else,
         Tool::Fn1,
         Tool::Fn2,
+        Tool::Numbers,
     ];
 
     fn name(self) -> &'static str {
@@ -43,6 +53,9 @@ impl Tool {
             Tool::Axe => "axe",
             Tool::Repeat => "repeat",
             Tool::Loops => "loops",
+            Tool::Until => "until",
+            Tool::Else => "else",
+            Tool::Numbers => "numbers",
             Tool::IfTree => "iftree",
             Tool::IfStar => "ifstar",
             Tool::Fn1 => "fn1",
@@ -65,7 +78,10 @@ pub struct CustomMap {
     loops: bool,
     if_tree: bool,
     if_star: bool,
+    until: bool,
+    otherwise: bool,
     functions: usize,
+    numbers: bool,
 }
 
 impl CustomMap {
@@ -82,7 +98,10 @@ impl CustomMap {
             loops: false,
             if_tree: false,
             if_star: false,
+            until: false,
+            otherwise: false,
             functions: 0,
+            numbers: false,
         };
         map.paint(0, 1, 'R');
         map.paint(5, 2, '*');
@@ -139,8 +158,11 @@ impl CustomMap {
             Tool::Loops => self.loops,
             Tool::IfTree => self.if_tree,
             Tool::IfStar => self.if_star,
+            Tool::Until => self.until,
+            Tool::Else => self.otherwise,
             Tool::Fn1 => self.functions >= 1,
             Tool::Fn2 => self.functions >= 2,
+            Tool::Numbers => self.numbers,
         }
     }
 
@@ -149,29 +171,40 @@ impl CustomMap {
     }
 
     /// Turn a block on or off. Some blocks need others: loops need repeat
-    /// (for their count), and "if" blocks and functions need loops, just as
-    /// in the game's own levels. The second function needs the first.
+    /// (for their count), and "if" blocks, "repeat until" and functions need
+    /// loops, just as in the game's own levels. The second function needs the
+    /// first, "else" needs an "if", and numbers need a function.
     pub fn toggle(&mut self, tool: Tool) {
         let on = !self.has(tool);
         match tool {
             Tool::Axe => self.axe = on,
             Tool::Repeat => self.repeat = on,
             Tool::Loops => self.loops = on,
+            Tool::Until => self.until = on,
             Tool::IfTree => self.if_tree = on,
             Tool::IfStar => self.if_star = on,
+            Tool::Else => self.otherwise = on,
             Tool::Fn1 => self.functions = usize::from(on),
             Tool::Fn2 => self.functions = if on { 2 } else { 1 },
+            Tool::Numbers => self.numbers = on,
         }
-        let needs_loops = self.if_tree || self.if_star || self.functions > 0;
         if on {
-            self.loops |= needs_loops;
+            if self.otherwise && !self.if_tree && !self.if_star {
+                self.if_tree = true;
+            }
+            if self.numbers && self.functions == 0 {
+                self.functions = 1;
+            }
+            self.loops |= self.until || self.if_tree || self.if_star || self.functions > 0;
             self.repeat |= self.loops;
         } else if !self.repeat {
             self.loops = false;
         }
         if !self.loops {
-            (self.if_tree, self.if_star, self.functions) = (false, false, 0);
+            (self.until, self.if_tree, self.if_star, self.functions) = (false, false, false, 0);
         }
+        self.otherwise &= self.if_tree || self.if_star;
+        self.numbers &= self.functions > 0;
         // Make the main program fit on one row next to the functions.
         self.set_slots(self.slots, false);
     }
@@ -201,7 +234,10 @@ impl CustomMap {
         level.loops = self.loops;
         level.if_tree = self.if_tree;
         level.if_star = self.if_star;
+        level.until = self.until;
+        level.otherwise = self.otherwise;
         level.functions = self.functions;
+        level.numbers = self.numbers;
         level
     }
 }
@@ -323,6 +359,32 @@ mod tests {
         m.toggle(Tool::Fn1);
         m.toggle(Tool::Fn1);
         assert_eq!(m.functions(), 0);
+        // "Else" brings an "if", and numbers bring a function; each goes
+        // when what it needs does.
+        m.toggle(Tool::Else);
+        assert!(m.has(Tool::IfTree) && m.has(Tool::Loops));
+        m.toggle(Tool::IfTree);
+        assert!(!m.has(Tool::Else));
+        m.toggle(Tool::Numbers);
+        assert_eq!(m.functions(), 1);
+        m.toggle(Tool::Fn1);
+        assert!(!m.has(Tool::Numbers));
+        m.toggle(Tool::Until);
+        assert!(m.has(Tool::Loops));
+        m.toggle(Tool::Loops);
+        assert!(!m.has(Tool::Until));
+    }
+
+    #[test]
+    fn new_blocks_are_saved_and_played() {
+        let mut m = CustomMap::new();
+        for tool in [Tool::Until, Tool::Else, Tool::Numbers] {
+            m.toggle(tool);
+        }
+        let maps = parse(&format(std::slice::from_ref(&m)));
+        assert_eq!(maps, [m.clone()]);
+        let level = m.to_level();
+        assert!(level.until && level.otherwise && level.numbers && level.if_tree);
     }
 
     #[test]

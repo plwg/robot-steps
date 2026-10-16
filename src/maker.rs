@@ -9,9 +9,10 @@ use crate::sound::Sfx;
 use crate::{
     AXE_BROWN, BACK_BUTTON, CALL_INK, DISABLED, Face, GRASS, GRASS_DARK, Game, H, IF_LIME, INK,
     MAX_CELL, PANEL, PLAY_GREEN, Paint, REPEAT_TEAL, SHADOW, SKY, STAR, STOP_RED, Screen, W,
-    darker, dir_color, draw_arrow, draw_axe_badge, draw_bracket, draw_door, draw_ice, draw_if_icon,
-    draw_key, draw_label, draw_loop_icon, draw_mystery, draw_play_icon, draw_robot, draw_rock,
-    draw_shape, draw_star, draw_trash_icon, draw_tree, mix, progress, rounded_rect,
+    darker, dir_color, draw_answer, draw_arrow, draw_axe_badge, draw_bracket, draw_door, draw_ice,
+    draw_if_icon, draw_key, draw_label, draw_loop_icon, draw_mystery, draw_number_icon,
+    draw_play_icon, draw_robot, draw_rock, draw_shape, draw_star, draw_trash_icon, draw_tree,
+    draw_until_icon, mix, progress, rounded_rect,
 };
 
 /// Where the map maker is up to.
@@ -298,11 +299,11 @@ impl Game {
             ));
         }
         for (i, &t) in Tool::ALL.iter().enumerate() {
-            let (col, row) = ((i % 4) as f32, (i / 4) as f32);
+            let (col, row) = ((i % 5) as f32, (i / 5) as f32);
             out.push((
                 Control::Tool(t),
-                vec2(1151.0 + col * 70.0, 440.0 + row * 72.0),
-                30.0,
+                vec2(1144.0 + col * 56.0, 436.0 + row * 66.0),
+                25.0,
             ));
         }
         for (i, &s) in SETTINGS.iter().enumerate() {
@@ -547,9 +548,9 @@ fn draw_back_button() {
 fn tool_colour(tool: Tool) -> Color {
     match tool {
         Tool::Axe => AXE_BROWN,
-        Tool::Repeat | Tool::Loops => REPEAT_TEAL,
-        Tool::IfTree | Tool::IfStar => IF_LIME,
-        Tool::Fn1 | Tool::Fn2 => CALL_INK,
+        Tool::Repeat | Tool::Loops | Tool::Until => REPEAT_TEAL,
+        Tool::IfTree | Tool::IfStar | Tool::Else => IF_LIME,
+        Tool::Fn1 | Tool::Fn2 | Tool::Numbers => CALL_INK,
     }
 }
 
@@ -566,8 +567,11 @@ fn draw_tool_icon(tool: Tool, c: Vec2, half: f32) {
         }
         Tool::IfTree => draw_if_icon(c, size, Sense::Tree, Dir::Right),
         Tool::IfStar => draw_if_icon(c, size, Sense::Star, Dir::Right),
+        Tool::Until => draw_until_icon(c, size, Dir::Right),
+        Tool::Else => draw_answer(c, false),
         Tool::Fn1 => draw_shape(c, half * 0.55, 1),
         Tool::Fn2 => draw_shape(c, half * 0.55, 2),
+        Tool::Numbers => draw_number_icon(c, half, 1),
     }
 }
 
