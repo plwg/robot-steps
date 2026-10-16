@@ -12,7 +12,7 @@ stars. There's no reading required.
 |---|---|
 | ![Three players, each with their own robot and progress](docs/players.png) | ![Level 48: the main program calls the ● and ▲ functions, and the robot is partway through ▲, chopping a tree](docs/level.png) |
 
-Across 94 levels in 16 chapters, numbered within each chapter (`3-2`), it
+Across 100 levels in 16 chapters, numbered within each chapter (`3-2`), it
 introduces, in the order programming is usually taught:
 
 1. **Moving:** up, down, left and right, in order

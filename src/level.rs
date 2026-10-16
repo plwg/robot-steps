@@ -679,6 +679,8 @@ pub const CHAPTERS: &[Chapter] = &[
             level("10", &["*....*", ".####.", "...R.*"]),
             level("11", &["R#*#*", ".#.#.", "....."]),
             level("12", &["*...*", ".#.#.", "..R..", ".#.#.", "*...*"]),
+            // A ring of stars to collect all the way round.
+            level("star-ring", &["R***", "*@@*", "*@@*", "****"]),
         ],
     },
     // The robot slides until something stops it (grass, a rock, or the edge),
@@ -694,6 +696,9 @@ pub const CHAPTERS: &[Chapter] = &[
             level("64", &["R~@~~", "~~~~~", "~~~~*", "~~~@~"]),
             level("65", &["~~~~~", "@@~*~", "~~~~~", "~R@~~"]),
             level("66", &["~~@~~", "*~~@~", "@~~~~", "R~~~@"]),
+            // A spiral of ice: each move whooshes all the way along a side, and
+            // the last one stops on the star in the middle.
+            level("ice-spiral", &["R~~~~", "@@@@~", "~~*@~", "~@@@~", "~~~~~"]),
         ],
     },
     // Chop trees, but rocks stay put.
@@ -705,6 +710,8 @@ pub const CHAPTERS: &[Chapter] = &[
             level("14", &["..@*", "R.#.", "..@."]).with_axe(),
             level("15", &["R@*", ".@.", "#@.", "..."]).with_axe(),
             level("16", &["R##.*"]).with_axe(),
+            // Timber! Chop, step, chop, step, all the way through.
+            level("timber", &["R###*"]).with_axe(),
             level("25", &["R.#.", "@@#@", "*..."]).with_axe(),
         ],
     },
@@ -715,6 +722,10 @@ pub const CHAPTERS: &[Chapter] = &[
         levels: &[
             level("d67", &["R.kD*"]).demo("R R R R"),
             level("67", &["kR.D*"]),
+            // Down the side path for the key, then back up to the door.
+            level("key-hunt", &["R..D*", "@@.@@", "@@k@@"]),
+            // Two keys behind, two doors ahead.
+            level("two-keys", &["kkR..DD*"]),
             level("68", &["k@*", ".@D", "R.."]),
             level("69", &["R#D*", ".@@@", "k@@@"]).with_axe(),
             level("71", &["R~~~k", "@@@@D", "*~~~."]),
@@ -739,6 +750,8 @@ pub const CHAPTERS: &[Chapter] = &[
                 &["R.......", "#######.", "........", ".#######", "*......."],
             )
             .with_repeat(5),
+            // Round and round, to the star in the middle.
+            level("spiral", &["R....", "@@@@.", "..*@.", ".@@@.", "....."]).with_repeat(5),
             // Two doors need two keys.
             level("70", &["R.D.D*", ".@@@@@", "k@@@@@", "k@@@@@"]).with_repeat(3),
             level("21", &["@@@@@@@@@", "R...#...*", "@@@@@@@@@"])
@@ -810,6 +823,12 @@ pub const CHAPTERS: &[Chapter] = &[
                 ],
             )
             .with_loops(5),
+            // Up the stairs, a star on every step.
+            level(
+                "stairs",
+                &["@@@@@*", "@@@@*.", "@@@*.@", "@@*.@@", "@*.@@@", "R.@@@@"],
+            )
+            .with_loops(2),
             level("38", &["R..@@@@@@", "@@...@@@@", "@@@@...@@", "@@@@@@..*"]).with_loops(5),
             level("39", &["...@...@..*", ".@.@.@.@.@@", "R@...@...@@"]).with_loops(8),
             level("40", &["R#.#.#.#*"]).with_axe().with_loops(4),
@@ -1045,6 +1064,9 @@ pub const CHAPTERS: &[Chapter] = &[
             level("rain-5", &["R2.1.3.*"]).with_sleep(3),
             // Two ways round: which one keeps dry?
             level("rain-6", &["R@@@", ".2.*", "@1@."]).with_sleep(3),
+            // Too many clouds to get under before it rains, and no sleep
+            // block: slide along the ice instead, all in one go.
+            level("rain-ice", &["R1111*", "~~~~~."]),
             // The same sleep each time: a loop.
             level("rain-7", &["R1.1.1.1.*"]).with_sleep(2).with_loops(2),
             level("rain-8", &["R.2.2.2.2*"]).with_sleep(3).with_loops(3),
@@ -1466,6 +1488,7 @@ mod tests {
         ("39", "[ U2 R2 D2 R2 ]2 U2 R2"),
         ("40", "[ cR R2 ]4"),
         ("73", "[ R U D R2 ]3"),
+        ("stairs", "[ R U ]5"),
         ("rain-7", "[ Z3 R2 ]5"),
         ("rain-8", "R [ Z3 R2 ]4"),
     ];
