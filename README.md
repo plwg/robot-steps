@@ -90,7 +90,7 @@ turns (actions) it took (a clock), with a trophy by any new best, and each playe
 first time they finish it: the fewest blocks and the fewest turns, each on
 its own. A finished level has a trophy next to its number: tap it to see
 them (a block and a clock), to play it again and beat them. The game
-draws a big, easy-to-spot pointer.
+draws a big, easy-to-spot pointer. Resting the pointer on a button for a moment shows its name.
 
 ## Making maps
 

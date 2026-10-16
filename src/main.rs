@@ -988,6 +988,9 @@ struct Game {
     failed_step: Option<Loc>,
     particles: Vec<Particle>,
     pressed: Option<(Button, f32)>,
+    /// The button under the pointer on the play screen, and since when: its
+    /// name pops up after a moment.
+    hover: Option<(Button, f32)>,
     time: f32,
     fullscreen: bool,
     /// Which screen is showing, and whose game it is.
@@ -1143,6 +1146,7 @@ impl Game {
             failed_step: None,
             particles: Vec::new(),
             pressed: None,
+            hover: None,
             time: 0.0,
             fullscreen,
             screen: Screen::Players,
@@ -2034,6 +2038,12 @@ impl Game {
 
     fn update(&mut self, dt: f32) {
         self.time += dt;
+        let under = (self.screen == Screen::Play)
+            .then(|| self.button_at(self.mouse))
+            .flatten();
+        if under != self.hover.map(|(b, _)| b) {
+            self.hover = under.map(|b| (b, self.time));
+        }
         if self.screen == Screen::Play && self.mode == Mode::Edit {
             self.refresh_sim();
         }
@@ -2306,6 +2316,90 @@ impl Game {
     }
 
     /// Every button for this level, with its centre and half-size.
+    /// The button showing at `m`, if any.
+    fn button_at(&self, m: Vec2) -> Option<Button> {
+        self.buttons()
+            .into_iter()
+            .find(|&(b, c, half)| self.visible(b) && (m - c).abs().max_element() <= half)
+            .map(|(b, _, _)| b)
+    }
+
+    /// What a button does, in a few words.
+    fn tooltip(&self, button: Button) -> String {
+        let text = match button {
+            Button::Arrow(Dir::Up) => "Go up",
+            Button::Arrow(Dir::Down) => "Go down",
+            Button::Arrow(Dir::Left) => "Go left",
+            Button::Arrow(Dir::Right) => "Go right",
+            Button::Axe => "Chop a tree",
+            Button::Sleep => "Sleep a tick",
+            Button::Repeat => "Do it more times",
+            Button::Loop => "Loop: repeat a group",
+            Button::If => "If: look first",
+            Button::Sense(sense) => {
+                return format!(
+                    "Look for {}",
+                    match sense {
+                        Sense::Tree => "a tree",
+                        Sense::Rock => "a rock",
+                        Sense::Star => "a star",
+                        Sense::Ice => "ice",
+                        Sense::Key => "a key",
+                        Sense::Door => "a door",
+                        Sense::Grass => "grass",
+                        Sense::Edge => "the edge",
+                        Sense::Wall => "a wall",
+                    }
+                );
+            }
+            Button::Not => "Not: if there's no...",
+            Button::Else => "Otherwise",
+            Button::Until => "Repeat until a wall",
+            Button::Number => "The function's number",
+            Button::Call(1) => "Run the circle function",
+            Button::Call(_) => "Run the triangle function",
+            Button::Play if self.running() => "Stop",
+            Button::Play => "Play",
+            Button::Undo => "Take out a block",
+            Button::Clear => "Clear the program",
+            Button::Fullscreen => "Full screen",
+            Button::Sound if self.muted => "Sound on",
+            Button::Sound => "Sound off",
+            Button::Map => "Back to the map",
+        };
+        text.to_string()
+    }
+
+    /// The name of the button under the pointer, once it's been there a
+    /// moment: in a label just above it, or for a button along the top of
+    /// the screen, beside it (below, the pointer would cover it).
+    fn draw_tooltip(&self) {
+        let Some((button, since)) = self.hover else {
+            return;
+        };
+        if self.time - since < 0.4 || is_mouse_button_down(MouseButton::Left) {
+            return;
+        }
+        let Some((_, c, half)) = self.buttons().into_iter().find(|&(b, _, _)| b == button) else {
+            return;
+        };
+        let text = self.tooltip(button);
+        let size = 24.0;
+        let w = measure_text(&text, None, size as u16, 1.0).width + 28.0;
+        let h = 40.0;
+        let (x, y) = if c.y - half - h - 10.0 >= 0.0 {
+            (c.x - w / 2.0, c.y - half - h - 10.0)
+        } else if c.x > W / 2.0 {
+            (c.x - half - w - 12.0, c.y - h / 2.0)
+        } else {
+            (c.x + half + 12.0, c.y - h / 2.0)
+        };
+        let x = x.clamp(8.0, W - w - 8.0);
+        rounded_rect(x, y + 3.0, w, h, 12.0, SHADOW);
+        rounded_rect(x, y, w, h, 12.0, INK);
+        draw_label(&text, vec2(x + w / 2.0, y + h / 2.0), size, WHITE);
+    }
+
     fn buttons(&self) -> Vec<(Button, Vec2, f32)> {
         let rows = self.tools();
         let (ys, max_half): (&[f32], f32) = if rows.len() == 1 {
@@ -2633,6 +2727,9 @@ impl Game {
         }
         draw_fullscreen_icon(vec2(1386.0, 36.0), 22.0, INK);
         draw_speaker_icon(SOUND_BUTTON, 22.0, !self.muted, INK);
+        if self.screen == Screen::Play {
+            self.draw_tooltip();
+        }
         self.draw_cursor();
     }
 
