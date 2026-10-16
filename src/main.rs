@@ -4,17 +4,21 @@
 // On Windows, don't open a console window alongside the game.
 #![windows_subsystem = "windows"]
 
+mod custom;
 mod level;
+mod maker;
 mod progress;
 mod sound;
 
 use std::f32::consts::PI;
 
+use custom::CustomMap;
 use level::{
     Block, Cmd, Dir, Event, Exec, Item, Level, Loc, MAX_TIMES, Pos, Sense, Step, Tile, World, tiles,
 };
 use macroquad::prelude::*;
 use macroquad::rand::gen_range;
+use maker::{MAKER_BUTTON, Maker};
 use sound::{Sfx, Sounds};
 
 // Everything is drawn on a fixed 16:9 canvas that is scaled to fit the window.
@@ -792,6 +796,12 @@ struct Game {
     clicks: Vec<(Vec2, f32)>,
     sounds: Sounds,
     muted: bool,
+    /// Maps made in the map maker, and where the maker is up to.
+    maps: Vec<CustomMap>,
+    maker: Maker,
+    /// A made-up map being played instead of a level, and the screen to go
+    /// back to afterwards.
+    custom: Option<(Level, Screen)>,
 }
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -802,6 +812,10 @@ enum Screen {
     Map,
     /// Playing a level.
     Play,
+    /// Everyone's made-up maps.
+    Maps,
+    /// Making a map.
+    Maker,
 }
 
 /// The idea each level is about, for colouring the map.
@@ -892,6 +906,9 @@ impl Game {
             clicks: Vec::new(),
             sounds,
             muted: false,
+            maps: progress::load_maps(),
+            maker: Maker::new(),
+            custom: None,
         };
         game.load(idx);
         game.count_finished();
@@ -926,6 +943,7 @@ impl Game {
     }
 
     fn open_map(&mut self) {
+        self.custom = None;
         self.particles.clear();
         self.reset_robot();
         self.screen = Screen::Map;
@@ -950,11 +968,20 @@ impl Game {
     }
 
     fn level(&self) -> &Level {
-        &self.levels[self.idx]
+        match &self.custom {
+            Some((level, _)) => level,
+            None => &self.levels[self.idx],
+        }
     }
 
     fn load(&mut self, idx: usize) {
         self.idx = idx;
+        self.custom = None;
+        self.start_level();
+    }
+
+    /// Get ready to play `level()`.
+    fn start_level(&mut self) {
         // A demo starts with its program written, ready to play.
         self.strips = match &self.level().demo {
             Some(strips) => strips.clone(),
@@ -970,7 +997,9 @@ impl Game {
 
     /// After a win: on to the next level, or back to the map after the last.
     fn next_level(&mut self) {
-        if self.idx + 1 < self.levels.len() {
+        if self.custom.is_some() {
+            self.leave_level();
+        } else if self.idx + 1 < self.levels.len() {
             self.load(self.idx + 1);
         } else {
             self.open_map();
@@ -1242,7 +1271,7 @@ impl Game {
                 self.muted = !self.muted;
                 self.sfx(Sfx::Tap);
             }
-            Button::Map => self.open_map(),
+            Button::Map => self.leave_level(),
         }
     }
 
@@ -1344,8 +1373,11 @@ impl Game {
         }
         self.event = None;
         if self.world.stars.is_empty() {
-            self.solved[self.idx] = true;
-            progress::save(self.slot, &self.keys, &self.solved);
+            // Made-up maps don't count towards a player's levels.
+            if self.custom.is_none() {
+                self.solved[self.idx] = true;
+                progress::save(self.slot, &self.keys, &self.solved);
+            }
             self.sfx(Sfx::Win);
             self.set_mode(Mode::Win);
             self.confetti();
@@ -1406,6 +1438,8 @@ impl Game {
             Screen::Players => self.click_players(m),
             Screen::Map => self.click_map(m),
             Screen::Play => self.click_play(m),
+            Screen::Maps => self.click_maps(m),
+            Screen::Maker => self.click_maker(m),
         }
     }
 
@@ -1459,6 +1493,11 @@ impl Game {
             self.open_players();
             return;
         }
+        if (m - MAKER_BUTTON).abs().max_element() <= 36.0 {
+            self.sfx(Sfx::Tap);
+            self.open_maps();
+            return;
+        }
         if let Some(i) = (0..self.levels.len()).find(|&i| (m - self.map_node(i)).length() < 40.0) {
             self.open_level(i);
         }
@@ -1487,10 +1526,16 @@ impl Game {
                 }
                 return;
             }
+            Screen::Maps | Screen::Maker => {
+                if is_key_pressed(KeyCode::Backspace) {
+                    self.click_back();
+                }
+                return;
+            }
             Screen::Play => {}
         }
         if is_key_pressed(KeyCode::M) {
-            self.open_map();
+            self.leave_level();
             return;
         }
         if self.mode == Mode::Win {
@@ -1873,6 +1918,8 @@ impl Game {
             Screen::Players => self.draw_players(),
             Screen::Map => self.draw_map(),
             Screen::Play => self.draw_play(),
+            Screen::Maps => self.draw_maps(),
+            Screen::Maker => self.draw_maker(),
         }
         draw_fullscreen_icon(vec2(1386.0, 36.0), 22.0, INK);
         draw_speaker_icon(SOUND_BUTTON, 22.0, !self.muted, INK);
@@ -1906,7 +1953,11 @@ impl Game {
         let c = vec2(104.0, 36.0);
         draw_circle(c.x, c.y, 22.0, WHITE);
         draw_circle(c.x, c.y, 19.0, Kind::of(self.level()).colour());
-        draw_level_label(self.level(), c, 26.0, WHITE);
+        if self.custom.is_some() {
+            maker::draw_pencil_icon(c, 15.0, WHITE);
+        } else {
+            draw_level_label(self.level(), c, 26.0, WHITE);
+        }
     }
 
     /// Three cards, one per player, each with its own robot and progress.
@@ -2081,6 +2132,23 @@ impl Game {
                 self.paint(),
             );
         }
+        // The map maker.
+        let m = MAKER_BUTTON;
+        let r = if (self.mouse - m).abs().max_element() <= 36.0 {
+            38.0
+        } else {
+            34.0
+        };
+        rounded_rect(
+            m.x - r,
+            m.y - r + 6.0,
+            r * 2.0,
+            r * 2.0,
+            16.0,
+            darker(CALL_INK, 0.7),
+        );
+        rounded_rect(m.x - r, m.y - r, r * 2.0, r * 2.0, 16.0, CALL_INK);
+        maker::draw_pencil_icon(m, r * 0.7, WHITE);
         // Back to the players: a left arrow, and whose map this is.
         let b = BACK_BUTTON;
         rounded_rect(
@@ -3064,6 +3132,7 @@ async fn main() {
             game.handle_click(game.mouse);
         }
         game.handle_keys();
+        game.drag_paint();
         game.update(get_frame_time().min(0.05));
         game.draw();
         next_frame().await;

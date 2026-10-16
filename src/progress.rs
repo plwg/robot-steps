@@ -4,6 +4,8 @@
 
 use std::collections::HashSet;
 
+use crate::custom::{self, CustomMap};
+
 /// How many players (save slots) there are.
 pub const SLOTS: usize = 3;
 
@@ -27,6 +29,17 @@ pub fn load(slot: usize, keys: &[String]) -> Vec<bool> {
 /// game, so errors are ignored.
 pub fn save(slot: usize, keys: &[String], solved: &[bool]) {
     store::write(&name(slot), &format(keys, solved));
+}
+
+/// The maps made in the map maker. Everyone shares them.
+const MAPS: &str = "maps.txt";
+
+pub fn load_maps() -> Vec<CustomMap> {
+    custom::parse(&store::read(MAPS).unwrap_or_default())
+}
+
+pub fn save_maps(maps: &[CustomMap]) {
+    store::write(MAPS, &custom::format(maps));
 }
 
 /// Saves are small text files in a folder: `%APPDATA%\RobotSteps` on

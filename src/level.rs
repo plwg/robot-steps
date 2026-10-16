@@ -669,15 +669,31 @@ pub struct Level {
 
 impl Level {
     pub fn parse(def: &LevelDef) -> Level {
-        let rows = def.map;
+        let mut level = Level::from_rows(def.map);
+        level.slots = def.slots;
+        level.chop = def.chop;
+        level.repeat = def.repeat;
+        level.check = def.check;
+        level.loops = def.loops;
+        level.if_tree = def.if_tree;
+        level.if_star = def.if_star;
+        level.functions = def.functions;
+        level.fn_slots = def.fn_slots;
+        level.demo = def.demo.map(parse_strips);
+        level
+    }
+
+    /// A level from its map (see `LevelDef::map`), with just the arrows.
+    pub fn from_rows<S: AsRef<str>>(rows: &[S]) -> Level {
         let h = rows.len() as i32;
-        let w = rows[0].len() as i32;
+        let w = rows[0].as_ref().len() as i32;
         let mut tiles = Vec::new();
         let mut start = None;
         let mut stars = Vec::new();
         let mut mysteries = Vec::new();
         let mut keys = Vec::new();
         for (y, row) in rows.iter().enumerate() {
+            let row = row.as_ref();
             assert_eq!(row.len() as i32, w, "level rows must be the same length");
             for (x, ch) in row.chars().enumerate() {
                 let p = (x as i32, y as i32);
@@ -705,19 +721,19 @@ impl Level {
             tiles,
             start: start.expect("level needs a robot (R)"),
             stars,
-            slots: def.slots,
-            chop: def.chop,
-            repeat: def.repeat,
-            check: def.check,
-            loops: def.loops,
-            if_tree: def.if_tree,
-            if_star: def.if_star,
-            functions: def.functions,
-            fn_slots: def.fn_slots,
+            slots: MAX_PROGRAM,
+            chop: false,
+            repeat: false,
+            check: false,
+            loops: false,
+            if_tree: false,
+            if_star: false,
+            functions: 0,
+            fn_slots: 0,
             mysteries,
             keys,
             number: 0,
-            demo: def.demo.map(parse_strips),
+            demo: None,
         }
     }
 

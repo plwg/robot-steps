@@ -48,6 +48,25 @@ Three players each have their own robot colour and their own progress. A
 level map shows which levels are finished, and the player's robot waits on
 the next one. The game draws a big, easy-to-spot pointer.
 
+## Making maps
+
+The pencil button on the level map opens the map maker. Tap the green **+**
+to start a map, then pick a tile on the right (grass, tree, rock, ice, mystery
+cloud, key, door, star or the robot) and tap or drag across the map to paint
+it. Under the map, − and + change its width and height and how many slots
+the program has (and each function, when there are functions). The buttons
+under the tiles choose the blocks it allows: the axe, repeat, loops, the two
+"if" blocks and the two functions. Some bring others along, as in the game's
+own levels: loops need repeat, and "if" blocks and functions need loops.
+Mystery clouds always come with the block that checks them (at most 8 per
+map).
+
+Press play to try the map out. The arrow at the top left goes back to
+everyone's maps, where a map can be played, changed with the pencil, or
+thrown away by tapping its bin twice. There's room for 8. They're shared by
+all three players (in `maps.txt` next to the progress files, or the browser's
+local storage), and finishing one doesn't count towards a player's levels.
+
 ## Running
 
 Needs [Rust](https://rustup.rs).
