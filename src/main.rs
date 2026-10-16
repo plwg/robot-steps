@@ -2525,9 +2525,10 @@ fn fit_camera() -> Camera2D {
     }
 }
 
-/// Start full screen unless run with `--window`.
+/// Start full screen unless run with `--window`. A web page can only go full
+/// screen after a tap, so there the game starts filling the page.
 fn start_fullscreen() -> bool {
-    !std::env::args().any(|a| a == "--window")
+    !cfg!(target_arch = "wasm32") && !std::env::args().any(|a| a == "--window")
 }
 
 /// WSL hands OpenGL programs a software renderer by default, which is far

@@ -4,6 +4,8 @@ A first coding game for young children (made for a 5-year-old). Tap arrows to
 build a program, press play, and watch the robot follow it to collect the
 stars. There's no reading required.
 
+**[Play it in your browser](https://plwg.github.io/robot-steps/)**
+
 ![The level map: finished levels have a star, and the player's robot waits on the next one](docs/map.png)
 
 | Choose a player | Playing a level |
@@ -58,6 +60,20 @@ cargo build --release --target x86_64-pc-windows-gnu
 
 Under WSL the game runs on the GPU, but WSL caps full screen at 4K to about
 40 fps. The native Windows build runs at a steady 60.
+
+### Web
+
+```bash
+rustup target add wasm32-unknown-unknown
+cargo build --release --target wasm32-unknown-unknown
+mkdir -p site && cp web/* target/wasm32-unknown-unknown/release/robot_steps.wasm site/
+python3 -m http.server -d site   # then open http://localhost:8000
+```
+
+`web/mq_js_bundle.js` is macroquad's loader, copied from the macroquad crate
+(update it with macroquad). In the browser, each player's progress is kept
+in local storage instead of a file. Every push to `master` publishes the web
+version to GitHub Pages (`.github/workflows/pages.yml`).
 
 ## Keyboard (for grown-ups)
 

@@ -1,43 +1,20 @@
 //! Which levels have been finished, for each of the three players, saved
 //! between games as a list of level numbers in a small text file per player.
 
-use std::path::PathBuf;
-
 /// How many players (save slots) there are.
 pub const SLOTS: usize = 3;
 
-/// The folder the saves live in: `%APPDATA%\RobotSteps` on Windows,
-/// otherwise `~/.local/share/robot_steps`.
-fn dir() -> Option<PathBuf> {
-    match std::env::var_os("APPDATA") {
-        Some(appdata) => Some(PathBuf::from(appdata).join("RobotSteps")),
-        None => {
-            let data = std::env::var_os("XDG_DATA_HOME")
-                .map(PathBuf::from)
-                .or_else(|| {
-                    std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/share"))
-                })?;
-            Some(data.join("robot_steps"))
-        }
-    }
-}
-
 /// `progress-1.txt` to `progress-3.txt`, for slots 0 to 2.
-fn path(slot: usize) -> Option<PathBuf> {
-    Some(dir()?.join(format!("progress-{}.txt", slot + 1)))
+fn name(slot: usize) -> String {
+    format!("progress-{}.txt", slot + 1)
 }
 
 /// Finished levels for one player, one flag per level. Missing or unreadable
 /// progress just means nothing is finished yet. Before there were players,
 /// progress was kept in `progress.txt`; that becomes the first player's.
 pub fn load(slot: usize, levels: usize) -> Vec<bool> {
-    let read = |p: Option<PathBuf>| p.and_then(|p| std::fs::read_to_string(p).ok());
-    let text = read(path(slot))
-        .or_else(|| {
-            (slot == 0)
-                .then(|| read(dir().map(|d| d.join("progress.txt"))))
-                .flatten()
-        })
+    let text = store::read(&name(slot))
+        .or_else(|| (slot == 0).then(|| store::read("progress.txt")).flatten())
         .unwrap_or_default();
     parse(&text, levels)
 }
@@ -45,11 +22,78 @@ pub fn load(slot: usize, levels: usize) -> Vec<bool> {
 /// Save one player's finished levels. Failing to save shouldn't stop the
 /// game, so errors are ignored.
 pub fn save(slot: usize, solved: &[bool]) {
-    if let Some(p) = path(slot) {
-        if let Some(dir) = p.parent() {
-            let _ = std::fs::create_dir_all(dir);
+    store::write(&name(slot), &format(solved));
+}
+
+/// Saves are small text files in a folder: `%APPDATA%\RobotSteps` on
+/// Windows, otherwise `~/.local/share/robot_steps`.
+#[cfg(not(target_arch = "wasm32"))]
+mod store {
+    use std::path::PathBuf;
+
+    fn dir() -> Option<PathBuf> {
+        match std::env::var_os("APPDATA") {
+            Some(appdata) => Some(PathBuf::from(appdata).join("RobotSteps")),
+            None => {
+                let data = std::env::var_os("XDG_DATA_HOME")
+                    .map(PathBuf::from)
+                    .or_else(|| {
+                        std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/share"))
+                    })?;
+                Some(data.join("robot_steps"))
+            }
         }
-        let _ = std::fs::write(p, format(solved));
+    }
+
+    pub fn read(name: &str) -> Option<String> {
+        std::fs::read_to_string(dir()?.join(name)).ok()
+    }
+
+    pub fn write(name: &str, text: &str) {
+        if let Some(dir) = dir() {
+            let _ = std::fs::create_dir_all(&dir);
+            let _ = std::fs::write(dir.join(name), text);
+        }
+    }
+}
+
+/// In a web browser there are no files, so saves go in the browser's local
+/// storage instead, through the little plugin in `web/storage.js`.
+#[cfg(target_arch = "wasm32")]
+mod store {
+    #[link(wasm_import_module = "env")]
+    unsafe extern "C" {
+        /// Copy the saved text into `buf` (if it fits) and return its length,
+        /// or -1 if there's nothing saved.
+        fn robot_storage_read(key: *const u8, key_len: usize, buf: *mut u8, cap: usize) -> i32;
+        fn robot_storage_write(key: *const u8, key_len: usize, text: *const u8, len: usize);
+    }
+
+    /// Lets the JavaScript side check it matches.
+    #[unsafe(no_mangle)]
+    pub extern "C" fn robot_storage_crate_version() -> u32 {
+        1
+    }
+
+    pub fn read(name: &str) -> Option<String> {
+        let mut buf = vec![0u8; 1024];
+        loop {
+            // SAFETY: both pointers are valid for the lengths given.
+            let len = unsafe {
+                robot_storage_read(name.as_ptr(), name.len(), buf.as_mut_ptr(), buf.len())
+            };
+            let len = usize::try_from(len).ok()?;
+            if len <= buf.len() {
+                buf.truncate(len);
+                return String::from_utf8(buf).ok();
+            }
+            buf = vec![0u8; len];
+        }
+    }
+
+    pub fn write(name: &str, text: &str) {
+        // SAFETY: both pointers are valid for the lengths given.
+        unsafe { robot_storage_write(name.as_ptr(), name.len(), text.as_ptr(), text.len()) };
     }
 }
 
