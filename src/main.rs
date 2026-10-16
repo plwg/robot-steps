@@ -3584,22 +3584,29 @@ impl Game {
 
     fn draw_next_prompt(&self) {
         let c = self.board().center();
-        // This run's blocks and turns, and any new best.
+        // This run's blocks and turns, as a block and a clock, each with a
+        // gold star that pops in if it's a new best.
         if let Some((blocks, turns, new_blocks, new_turns)) = self.result {
-            let card = Rect::new(c.x - 210.0, c.y - 190.0, 420.0, 96.0);
+            let card = Rect::new(c.x - 170.0, c.y - 180.0, 340.0, 80.0);
             rounded_rect(card.x, card.y + 5.0, card.w, card.h, 22.0, SHADOW);
             rounded_rect(card.x, card.y, card.w, card.h, 22.0, WHITE);
-            let line = |y: f32, text: String, new: bool| {
-                let colour = if new { darker(STAR, 0.75) } else { INK };
-                let text = if new {
-                    format!("{text}  New best!")
-                } else {
-                    text
-                };
-                draw_label(&text, vec2(c.x, y), 28.0, colour);
+            let pop = (self.timer - 0.8).clamp(0.0, 0.3) / 0.3;
+            let y = card.y + card.h / 2.0;
+            let stat = |x: f32, n: usize, new: bool, icon: &dyn Fn(Vec2)| {
+                icon(vec2(x, y));
+                draw_label_left(&n.to_string(), vec2(x + 26.0, y), 34.0, INK);
+                if new {
+                    let spin = (1.0 - pop) * 3.0;
+                    draw_star(vec2(x + 90.0, y), 20.0 * pop, spin, STAR);
+                }
             };
-            line(card.y + 30.0, format!("{blocks} blocks"), new_blocks);
-            line(card.y + 66.0, format!("{turns} turns"), new_turns);
+            stat(card.x + 40.0, blocks, new_blocks, &|p| {
+                rounded_rect(p.x - 16.0, p.y - 16.0, 32.0, 32.0, 7.0, PLAY_GREEN);
+                draw_arrow(p, 22.0, Dir::Right, WHITE);
+            });
+            stat(card.x + 200.0, turns, new_turns, &|p| {
+                draw_clock_icon(p, 17.0, INK)
+            });
         }
         let pulse = 1.0 + (self.time * 5.0).sin() * 0.06;
         let r = 70.0 * pulse;

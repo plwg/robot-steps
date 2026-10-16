@@ -79,8 +79,8 @@ level map shows each chapter as an island, and its levels as dots: filled
 in with a star once finished, a play sign for a demo, and the next one to
 play pulsing.
 
-Each win shows how many blocks the program used and how many turns
-(actions) it took, and each player's best for each level is kept from the
+Each win shows how many blocks the program used (a block) and how many
+turns (actions) it took (a clock), with a gold star by any new best, and each player's best for each level is kept from the
 first time they finish it: the fewest blocks and the fewest turns, each on
 its own. A finished level has a trophy next to its number: tap it to see
 them (a block and a clock), to play it again and beat them. The game
