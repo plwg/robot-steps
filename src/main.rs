@@ -685,6 +685,25 @@ fn draw_robot(c: Vec2, cell: f32, face: Face, look: Vec2, time: f32, lift: f32, 
     }
 }
 
+/// A trophy cup.
+fn draw_trophy(c: Vec2, size: f32, colour: Color) {
+    let s = size;
+    draw_circle(c.x, c.y - s * 0.12, s * 0.3, colour);
+    draw_rectangle(c.x - s * 0.3, c.y - s * 0.42, s * 0.6, s * 0.3, colour);
+    draw_circle_lines(c.x - s * 0.32, c.y - s * 0.2, s * 0.13, s * 0.06, colour);
+    draw_circle_lines(c.x + s * 0.32, c.y - s * 0.2, s * 0.13, s * 0.06, colour);
+    draw_rectangle(c.x - s * 0.06, c.y + s * 0.1, s * 0.12, s * 0.2, colour);
+    draw_rectangle(c.x - s * 0.24, c.y + s * 0.28, s * 0.48, s * 0.12, colour);
+}
+
+/// Text starting at `left` (and centred up and down on it).
+fn draw_label_left(text: &str, left: Vec2, size: f32, color: Color) {
+    let scale = (screen_width() / W).min(screen_height() / H) * screen_dpi_scale();
+    let font_size = (size * scale).round() as u16;
+    let dims = measure_text(text, None, font_size, 1.0 / scale);
+    draw_label(text, left + vec2(dims.width / 2.0, 0.0), size, color);
+}
+
 fn draw_play_icon(c: Vec2, r: f32, color: Color) {
     draw_triangle(
         c + vec2(-r * 0.35, -r * 0.45),
@@ -900,6 +919,16 @@ struct Game {
     preview: Vec<bool>,
     /// The slider's knob is being dragged.
     sliding: bool,
+    /// Challenge mode, once every level is done: every block, plenty of
+    /// room, and the player's best kept for each level.
+    challenge: bool,
+    /// This player's best in challenge mode.
+    best: progress::Best,
+    /// The level being played in challenge mode.
+    challenge_level: Option<Level>,
+    /// How the last challenge win went: blocks and turns, and whether each
+    /// was a new best.
+    result: Option<(usize, usize, bool, bool)>,
 }
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -1027,6 +1056,10 @@ impl Game {
             scrub: 0,
             preview: Vec::new(),
             sliding: false,
+            challenge: false,
+            best: progress::Best::new(),
+            challenge_level: None,
+            result: None,
         };
         game.load(idx);
         game.count_finished();
@@ -1068,11 +1101,37 @@ impl Game {
         self.sfx(Sfx::Tap);
         self.slot = slot;
         self.solved = progress::load(slot, &self.keys);
+        self.best = progress::load_best(slot);
+        self.challenge = false;
         self.open_map();
+    }
+
+    /// Has this player finished every level? Then challenge mode opens.
+    fn all_done(&self) -> bool {
+        self.solved.iter().all(|&done| done)
+    }
+
+    /// A challenge win: keep the player's best blocks and turns.
+    fn record_best(&mut self) {
+        let blocks: usize = self.strips.iter().map(|s| tiles(s)).sum();
+        let end = (self.pc + 1).min(self.trace.len());
+        let turns = self.trace[..end]
+            .iter()
+            .filter(|e| matches!(e.step, Step::Do(_)))
+            .count();
+        let key = self.levels[self.idx].key();
+        let old = self.best.get(&key).copied();
+        let new_blocks = old.is_none_or(|(b, _)| blocks < b);
+        let new_turns = old.is_none_or(|(_, t)| turns < t);
+        let (b, t) = old.unwrap_or((blocks, turns));
+        self.best.insert(key, (b.min(blocks), t.min(turns)));
+        progress::save_best(self.slot, &self.best);
+        self.result = Some((blocks, turns, new_blocks, new_turns));
     }
 
     fn open_map(&mut self) {
         self.custom = None;
+        self.challenge_level = None;
         self.particles.clear();
         self.reset_robot();
         self.screen = Screen::Map;
@@ -1097,15 +1156,18 @@ impl Game {
     }
 
     fn level(&self) -> &Level {
-        match &self.custom {
-            Some((level, _)) => level,
-            None => &self.levels[self.idx],
+        match (&self.custom, &self.challenge_level) {
+            (Some((level, _)), _) => level,
+            (None, Some(level)) => level,
+            (None, None) => &self.levels[self.idx],
         }
     }
 
     fn load(&mut self, idx: usize) {
         self.idx = idx;
         self.custom = None;
+        self.result = None;
+        self.challenge_level = self.challenge.then(|| self.levels[idx].challenge());
         self.start_level();
     }
 
@@ -1129,12 +1191,13 @@ impl Game {
 
     /// After a win: on to the next level, or back to the map after the last.
     fn next_level(&mut self) {
-        if self.custom.is_some() {
-            self.leave_level();
-        } else if self.idx + 1 < self.levels.len() {
-            self.load(self.idx + 1);
-        } else {
-            self.open_map();
+        // In a challenge, demos are skipped: there's nothing to beat.
+        let next = (self.idx + 1..self.levels.len())
+            .find(|&i| !self.challenge || self.levels[i].demo.is_none());
+        match next {
+            _ if self.custom.is_some() => self.leave_level(),
+            Some(i) => self.load(i),
+            None => self.open_map(),
         }
     }
 
@@ -1834,8 +1897,11 @@ impl Game {
             return;
         }
         if self.world.stars.is_empty() {
-            // Made-up maps don't count towards a player's levels.
-            if self.custom.is_none() {
+            // Made-up maps don't count towards a player's levels, and a
+            // challenge keeps the player's best instead.
+            if self.challenge_level.is_some() {
+                self.record_best();
+            } else if self.custom.is_none() {
                 self.solved[self.idx] = true;
                 progress::save(self.slot, &self.keys, &self.solved);
             }
@@ -1961,12 +2027,18 @@ impl Game {
             self.open_players();
             return;
         }
-        if (m - MAKER_BUTTON).abs().max_element() <= 36.0 {
+        if (m - MAKER_BUTTON).abs().max_element() <= 30.0 {
             self.sfx(Sfx::Tap);
             self.open_maps();
             return;
         }
-        if let Some(i) = (0..self.levels.len()).find(|&i| (m - self.map_node(i)).length() < 40.0) {
+        if self.all_done() && (m - CHALLENGE_BUTTON).abs().max_element() <= 30.0 {
+            self.sfx(Sfx::Tap);
+            self.challenge = !self.challenge;
+            return;
+        }
+        let near = |i: usize| (m - self.map_node(i)).abs().max_element() <= MAP_TILE * 0.6;
+        if let Some(i) = (0..self.levels.len()).find(|&i| near(i) && self.playable(i)) {
             self.open_level(i);
         }
     }
@@ -2141,18 +2213,54 @@ impl Game {
         buttons
     }
 
-    /// Where level `i` sits on the map: a path that winds back and forth.
-    fn map_node(&self, i: usize) -> Vec2 {
-        let cols = MAP_COLS;
-        let rows = self.levels.len().div_ceil(cols);
-        let (row, mut col) = (i / cols, i % cols);
+    /// How many chapters there are.
+    fn chapters(&self) -> usize {
+        self.levels.last().map_or(0, |l| l.chapter)
+    }
+
+    /// Where chapter `chapter` (from 1) sits on the map: an island in a grid,
+    /// in order along rows that wind back and forth, so each leads on to the
+    /// next one beside (or below) it.
+    fn island(&self, chapter: usize) -> Rect {
+        let rows = self.chapters().div_ceil(ISLAND_COLS);
+        let (row, mut col) = ((chapter - 1) / ISLAND_COLS, (chapter - 1) % ISLAND_COLS);
         if row % 2 == 1 {
-            col = cols - 1 - col;
+            col = ISLAND_COLS - 1 - col;
         }
-        let x_step = ((W - 200.0) / (cols - 1) as f32).min(154.0);
-        let y_step = (600.0 / rows as f32).min(115.0);
-        let x0 = W / 2.0 - x_step * (cols - 1) as f32 / 2.0;
-        vec2(x0 + col as f32 * x_step, 150.0 + row as f32 * y_step)
+        let gap = 18.0;
+        let (top, bottom) = (86.0, H - 14.0);
+        let w = (W - 40.0 - gap * (ISLAND_COLS - 1) as f32) / ISLAND_COLS as f32;
+        let h = (bottom - top - gap * (rows - 1) as f32) / rows as f32;
+        Rect::new(
+            20.0 + col as f32 * (w + gap),
+            top + row as f32 * (h + gap),
+            w,
+            h,
+        )
+    }
+
+    /// Where level `i` sits on the map: in rows on its chapter's island.
+    fn map_node(&self, i: usize) -> Vec2 {
+        let chapter = self.levels[i].chapter;
+        let first = self
+            .levels
+            .iter()
+            .position(|l| l.chapter == chapter)
+            .unwrap_or(i);
+        let k = i - first;
+        let r = self.island(chapter);
+        let per_row = 5;
+        let step = (r.w - 30.0) / per_row as f32;
+        vec2(
+            r.x + 15.0 + step * ((k % per_row) as f32 + 0.5),
+            r.y + 70.0 + (k / per_row) as f32 * MAP_TILE * 1.25,
+        )
+    }
+
+    /// Can level `i` be played? In a challenge, demos can't (there's
+    /// nothing to beat).
+    fn playable(&self, i: usize) -> bool {
+        !self.challenge || self.levels[i].demo.is_none()
     }
 
     /// Where the map goes. Levels with functions have more program strips,
@@ -2451,6 +2559,14 @@ impl Game {
         rounded_rect(c.x - 31.0, c.y - 19.0, 62.0, 38.0, 19.0, colour);
         if self.custom.is_some() {
             maker::draw_pencil_icon(c, 15.0, WHITE);
+        } else if self.challenge_level.is_some() {
+            // A challenge: a trophy, and the best so far.
+            draw_trophy(c, 30.0, STAR);
+            let text = match self.best.get(&self.levels[self.idx].key()) {
+                Some((blocks, turns)) => format!("Best: {blocks} blocks, {turns} turns"),
+                None => "Challenge".to_string(),
+            };
+            draw_label_left(&text, vec2(c.x + 44.0, c.y), 24.0, INK);
         } else {
             draw_level_label(self.level(), c, 30.0, WHITE);
             let name = level::chapter_name(self.level().chapter);
@@ -2588,41 +2704,129 @@ impl Game {
     /// player's robot waiting on the next one.
     fn draw_map(&self) {
         let n = self.levels.len();
-        let next = self.next_unfinished();
-        // The path joining the levels.
-        for i in 1..n {
-            let (a, b) = (self.map_node(i - 1), self.map_node(i));
-            draw_line(a.x, a.y, b.x, b.y, 16.0, Color::new(1.0, 1.0, 1.0, 0.55));
+        let next = self.next_unfinished().filter(|_| !self.challenge);
+        // A path from each chapter's island to the next.
+        for ch in 1..self.chapters() {
+            let (a, b) = (self.island(ch).center(), self.island(ch + 1).center());
+            draw_line(a.x, a.y, b.x, b.y, 22.0, Color::new(1.0, 1.0, 1.0, 0.5));
         }
+        // The islands, each with its chapter's number, name, and how many of
+        // its levels are done.
+        for ch in 1..=self.chapters() {
+            let r = self.island(ch);
+            let Some(first) = self.levels.iter().find(|l| l.chapter == ch) else {
+                continue;
+            };
+            let colour = self.colour_of(first);
+            let land = mix(colour, WHITE, 0.78);
+            // In a challenge, each island has a gold rim.
+            if self.challenge {
+                rounded_rect(r.x - 5.0, r.y - 5.0, r.w + 10.0, r.h + 16.0, 30.0, STAR);
+            }
+            rounded_rect(r.x, r.y + 6.0, r.w, r.h, 26.0, darker(colour, 0.7));
+            rounded_rect(r.x, r.y, r.w, r.h, 26.0, land);
+            let badge = vec2(r.x + 30.0, r.y + 28.0);
+            draw_circle(badge.x, badge.y, 18.0, colour);
+            draw_label(&ch.to_string(), badge, 24.0, WHITE);
+            draw_label_left(
+                level::chapter_name(ch),
+                vec2(r.x + 56.0, r.y + 28.0),
+                22.0,
+                INK,
+            );
+            let (done, total) = self
+                .levels
+                .iter()
+                .enumerate()
+                .filter(|(i, l)| l.chapter == ch && self.playable(*i))
+                .fold((0, 0), |(d, t), (i, _)| {
+                    let won = if self.challenge {
+                        self.best.contains_key(&self.levels[i].key())
+                    } else {
+                        self.solved[i]
+                    };
+                    (d + usize::from(won), t + 1)
+                });
+            // Down in the corner, clear of the name.
+            let corner = vec2(r.right() - 34.0, r.bottom() - 24.0);
+            if done == total {
+                draw_star(corner, 16.0, 0.0, STAR);
+            } else {
+                let text = format!("{done}/{total}");
+                draw_label(&text, corner, 22.0, darker(colour, 0.7));
+            }
+        }
+        // The levels: tiles on their island.
         for i in 0..n {
             let c = self.map_node(i);
-            let colour = self.colour_of(&self.levels[i]);
-            let mut r = 34.0;
-            if (self.mouse - c).length() < 40.0 {
-                r += 5.0;
+            let level = &self.levels[i];
+            let colour = self.colour_of(level);
+            let mut half = MAP_TILE / 2.0;
+            if (self.mouse - c).abs().max_element() <= half * 1.2 && self.playable(i) {
+                half += 3.0;
             }
             if next == Some(i) {
-                r += (self.time * 4.0).sin().abs() * 4.0;
+                half += (self.time * 4.0).sin().abs() * 3.0;
             }
-            draw_circle(c.x, c.y + 4.0, r, darker(colour, 0.7));
-            if self.solved[i] {
-                draw_circle(c.x, c.y, r, colour);
-                draw_level_label(&self.levels[i], c, 30.0, WHITE);
-                draw_star(c + vec2(24.0, -24.0), 17.0, 0.0, darker(STAR, 0.8));
-                draw_star(c + vec2(24.0, -26.0), 15.0, 0.0, STAR);
+            let done = if self.challenge {
+                self.best.contains_key(&level.key())
             } else {
-                draw_circle(c.x, c.y, r, colour);
-                draw_circle(c.x, c.y, r - 6.0, WHITE);
-                draw_level_label(&self.levels[i], c, 30.0, colour);
+                self.solved[i]
+            };
+            let colour = if self.playable(i) {
+                colour
+            } else {
+                mix(colour, WHITE, 0.6)
+            };
+            let s = half * 2.0;
+            rounded_rect(
+                c.x - half,
+                c.y - half + 4.0,
+                s,
+                s,
+                10.0,
+                darker(colour, 0.7),
+            );
+            let label = match level.demo {
+                Some(_) => None,
+                None => Some(level.number.to_string()),
+            };
+            let ink = if done {
+                rounded_rect(c.x - half, c.y - half, s, s, 10.0, colour);
+                WHITE
+            } else {
+                rounded_rect(c.x - half, c.y - half, s, s, 10.0, colour);
+                rounded_rect(
+                    c.x - half + 4.0,
+                    c.y - half + 4.0,
+                    s - 8.0,
+                    s - 8.0,
+                    7.0,
+                    WHITE,
+                );
+                colour
+            };
+            match label {
+                Some(text) => draw_label(&text, c, 22.0, ink),
+                None => draw_play_icon(c + vec2(1.0, 0.0), 20.0, ink),
+            }
+            if done && !self.challenge {
+                draw_star(c + vec2(half - 2.0, -half + 2.0), 9.0, 0.0, STAR);
+            }
+            // In a challenge, the fewest blocks so far, underneath.
+            if self.challenge
+                && let Some((blocks, _)) = self.best.get(&level.key())
+            {
+                draw_label(&blocks.to_string(), c + vec2(0.0, half + 10.0), 16.0, INK);
             }
         }
         // This player's robot sits on the next level to play.
         if let Some(i) = next {
-            let c = self.map_node(i) - vec2(0.0, 58.0);
-            let hop = (self.time * 3.0).sin().abs() * 6.0;
+            let c = self.map_node(i) - vec2(0.0, MAP_TILE * 0.85);
+            let hop = (self.time * 3.0).sin().abs() * 4.0;
             draw_robot(
                 c - vec2(0.0, hop),
-                70.0,
+                38.0,
                 Face::Happy,
                 Vec2::ZERO,
                 self.time,
@@ -2630,22 +2834,40 @@ impl Game {
                 self.paint(),
             );
         }
+        // Challenge mode, once every level is done: a trophy.
+        if self.all_done() {
+            let m = CHALLENGE_BUTTON;
+            let lit = if self.challenge { STAR } else { PANEL };
+            rounded_rect(m.x - 26.0, m.y - 26.0, 52.0, 52.0, 14.0, lit);
+            draw_trophy(
+                m,
+                34.0,
+                if self.challenge {
+                    WHITE
+                } else {
+                    darker(STAR, 0.85)
+                },
+            );
+        }
+        if self.challenge {
+            draw_label("Challenge", vec2(W / 2.0, 40.0), 34.0, INK);
+        }
         // The map maker.
         let m = MAKER_BUTTON;
-        let r = if (self.mouse - m).abs().max_element() <= 36.0 {
-            38.0
+        let r = if (self.mouse - m).abs().max_element() <= 30.0 {
+            28.0
         } else {
-            34.0
+            26.0
         };
         rounded_rect(
             m.x - r,
-            m.y - r + 6.0,
+            m.y - r + 5.0,
             r * 2.0,
             r * 2.0,
-            16.0,
+            14.0,
             darker(CALL_INK, 0.7),
         );
-        rounded_rect(m.x - r, m.y - r, r * 2.0, r * 2.0, 16.0, CALL_INK);
+        rounded_rect(m.x - r, m.y - r, r * 2.0, r * 2.0, 14.0, CALL_INK);
         maker::draw_pencil_icon(m, r * 0.7, WHITE);
         // Back to the players: a left arrow, and whose map this is.
         let b = BACK_BUTTON;
@@ -3386,6 +3608,23 @@ impl Game {
 
     fn draw_next_prompt(&self) {
         let c = self.board().center();
+        // After a challenge: this run's blocks and turns, and any new best.
+        if let Some((blocks, turns, new_blocks, new_turns)) = self.result {
+            let card = Rect::new(c.x - 210.0, c.y - 190.0, 420.0, 96.0);
+            rounded_rect(card.x, card.y + 5.0, card.w, card.h, 22.0, SHADOW);
+            rounded_rect(card.x, card.y, card.w, card.h, 22.0, WHITE);
+            let line = |y: f32, text: String, new: bool| {
+                let colour = if new { darker(STAR, 0.75) } else { INK };
+                let text = if new {
+                    format!("{text}  New best!")
+                } else {
+                    text
+                };
+                draw_label(&text, vec2(c.x, y), 28.0, colour);
+            };
+            line(card.y + 30.0, format!("{blocks} blocks"), new_blocks);
+            line(card.y + 66.0, format!("{turns} turns"), new_turns);
+        }
         let pulse = 1.0 + (self.time * 5.0).sin() * 0.06;
         let r = 70.0 * pulse;
         draw_circle(c.x, c.y + 6.0, r, darker(PLAY_GREEN, 0.7));
@@ -3432,8 +3671,12 @@ const SOUND_BUTTON: Vec2 = vec2(1334.0, 36.0);
 /// The size of the eraser that appears on a program block under the pointer.
 const ERASER_R: f32 = 14.0;
 
-/// Levels per row on the level map.
-const MAP_COLS: usize = 12;
+/// Chapters (islands) per row on the level map, and how big a level's tile
+/// is on it.
+const ISLAND_COLS: usize = 5;
+const MAP_TILE: f32 = 36.0;
+/// The challenge mode button on the level map.
+const CHALLENGE_BUTTON: Vec2 = vec2(1200.0, 38.0);
 /// The map's back-to-players button.
 const BACK_BUTTON: Vec2 = vec2(52.0, 44.0);
 

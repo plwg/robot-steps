@@ -3,7 +3,7 @@
 //! files, which never changes: see `LevelDef::id`) in a small text file per
 //! player.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use crate::custom::{self, CustomMap};
 
@@ -30,6 +30,41 @@ pub fn load(slot: usize, keys: &[String]) -> Vec<bool> {
 /// game, so errors are ignored.
 pub fn save(slot: usize, keys: &[String], solved: &[bool]) {
     store::write(&name(slot), &format(keys, solved));
+}
+
+/// A player's best in challenge mode, per level key: the fewest blocks, and
+/// the fewest turns (actions while running), each kept on its own.
+pub type Best = HashMap<String, (usize, usize)>;
+
+fn best_name(slot: usize) -> String {
+    format!("challenge-{}.txt", slot + 1)
+}
+
+pub fn load_best(slot: usize) -> Best {
+    parse_best(&store::read(&best_name(slot)).unwrap_or_default())
+}
+
+pub fn save_best(slot: usize, best: &Best) {
+    let mut lines: Vec<String> = best
+        .iter()
+        .map(|(k, (blocks, turns))| format!("{k} {blocks} {turns}"))
+        .collect();
+    lines.sort();
+    store::write(&best_name(slot), &(lines.join("\n") + "\n"));
+}
+
+/// Each line is a level key, its fewest blocks and its fewest turns; any
+/// line that isn't is skipped.
+fn parse_best(text: &str) -> Best {
+    text.lines()
+        .filter_map(|line| {
+            let mut words = line.split_whitespace();
+            let key = words.next()?;
+            let blocks = words.next()?.parse().ok()?;
+            let turns = words.next()?.parse().ok()?;
+            Some((key.to_string(), (blocks, turns)))
+        })
+        .collect()
 }
 
 /// The maps made in the map maker. Everyone shares them.
@@ -148,6 +183,14 @@ mod tests {
             parse("2 oops 0 99\n", &keys),
             [false, false, true, false, false]
         );
+    }
+
+    #[test]
+    fn bests_round_trip_and_skip_junk() {
+        let best = parse_best("7 4 12\nrain-2 3 9\nnonsense\n8 x 1\n");
+        assert_eq!(best.len(), 2);
+        assert_eq!(best["7"], (4, 12));
+        assert_eq!(best["rain-2"], (3, 9));
     }
 
     #[test]

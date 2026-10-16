@@ -4,15 +4,15 @@
 use macroquad::prelude::*;
 
 use crate::custom::{self, CustomMap, MAX_MAPS, Tool};
-use crate::level::Dir;
+use crate::level::{Dir, Weather};
 use crate::sound::Sfx;
 use crate::{
-    AXE_BROWN, BACK_BUTTON, CALL_INK, DISABLED, Face, GRASS, GRASS_DARK, Game, H, IF_LIME, INK,
+    AXE_BROWN, BACK_BUTTON, CALL_INK, DISABLED, Face, GRASS, GRASS_DARK, Game, IF_LIME, INK,
     MAX_CELL, PANEL, PLAY_GREEN, Paint, REPEAT_TEAL, SHADOW, SKY, STAR, STOP_RED, Screen, W,
-    darker, dir_color, draw_answer, draw_arrow, draw_axe_badge, draw_bracket, draw_door, draw_ice,
-    draw_key, draw_label, draw_loop_icon, draw_mystery, draw_number_icon, draw_play_icon,
-    draw_question, draw_robot, draw_rock, draw_shape, draw_star, draw_trash_icon, draw_tree,
-    draw_until_icon, mix, progress, rounded_rect,
+    WAIT_SLATE, darker, dir_color, draw_answer, draw_arrow, draw_axe_badge, draw_bracket,
+    draw_door, draw_ice, draw_key, draw_label, draw_loop_icon, draw_mystery, draw_number_icon,
+    draw_play_icon, draw_question, draw_rain_cloud, draw_robot, draw_rock, draw_shape, draw_star,
+    draw_trash_icon, draw_tree, draw_until_icon, draw_wait_icon, mix, progress, rounded_rect,
 };
 
 /// Where the map maker is up to.
@@ -40,7 +40,7 @@ impl Maker {
 }
 
 /// The map maker's button on the level map.
-pub const MAKER_BUTTON: Vec2 = vec2(W - 90.0, H - 56.0);
+pub const MAKER_BUTTON: Vec2 = vec2(W - 150.0, 38.0);
 
 /// Where the editor's map goes.
 const BOARD: Rect = Rect {
@@ -291,11 +291,11 @@ impl Game {
     fn controls(&self) -> Vec<(Control, Vec2, f32)> {
         let mut out = Vec::new();
         for (i, &p) in custom::PAINTS.iter().enumerate() {
-            let (col, row) = ((i % 3) as f32, (i / 3) as f32);
+            let (col, row) = ((i % 4) as f32, (i / 4) as f32);
             out.push((
                 Control::Paint(p),
-                vec2(1256.0 + (col - 1.0) * 92.0, 140.0 + row * 92.0),
-                40.0,
+                vec2(1256.0 + (col - 1.5) * 70.0, 128.0 + row * 82.0),
+                31.0,
             ));
         }
         for (i, &t) in Tool::ALL.iter().enumerate() {
@@ -387,9 +387,19 @@ impl Game {
         if self.maker.painted == Some((x, y)) {
             return;
         }
+        let fresh = self.maker.painted.is_none();
         self.maker.painted = Some((x, y));
-        let paint = self.maker.paint;
-        if self.map().get(x, y) != paint {
+        let mut paint = self.maker.paint;
+        // Tapping a rain cloud with rain counts it down: 3, 2, 1, 3...
+        let here = self.map().get(x, y);
+        if paint == '3' && fresh && matches!(here, '1'..='3') {
+            paint = match here {
+                '3' => '2',
+                '2' => '1',
+                _ => '3',
+            };
+        }
+        if here != paint {
             self.map_mut().paint(x, y, paint);
             self.sfx(Sfx::Step(Dir::Up));
         }
@@ -548,6 +558,7 @@ fn draw_back_button() {
 fn tool_colour(tool: Tool) -> Color {
     match tool {
         Tool::Axe => AXE_BROWN,
+        Tool::Wait => WAIT_SLATE,
         Tool::Repeat | Tool::Loops | Tool::Until => REPEAT_TEAL,
         Tool::If | Tool::Else => IF_LIME,
         Tool::Fn1 | Tool::Fn2 | Tool::Numbers => CALL_INK,
@@ -571,6 +582,7 @@ fn draw_tool_icon(tool: Tool, c: Vec2, half: f32) {
         Tool::Fn1 => draw_shape(c, half * 0.55, 1),
         Tool::Fn2 => draw_shape(c, half * 0.55, 2),
         Tool::Numbers => draw_number_icon(c, half, 1),
+        Tool::Wait => draw_wait_icon(c, size, WHITE),
     }
 }
 
@@ -582,6 +594,11 @@ fn draw_tile(what: char, c: Vec2, cell: f32, time: f32, paint: Paint) {
         '~' => draw_ice(c.x - cell / 2.0, c.y - cell / 2.0, cell, false),
         '?' => draw_mystery(c, cell, 1.0, time),
         'k' => draw_key(c, cell * 0.7, crate::GOLD),
+        '1'..='3' => {
+            let n = what as u8 - b'0';
+            // Bigger than in the game, as there's no robot to keep clear of.
+            draw_rain_cloud(c + vec2(0.0, cell * 0.2), cell * 1.4, Weather::Dry(n), time);
+        }
         'D' => draw_door(c, cell, 0.0),
         '*' => draw_star(c, cell * 0.3, 0.0, STAR),
         'R' => draw_robot(c, cell, Face::Calm, Vec2::ZERO, time, 0.0, paint),

@@ -4,6 +4,10 @@ use std::collections::HashSet;
 
 /// The most blocks a program can ever hold (two rows of twelve slots).
 pub const MAX_PROGRAM: usize = 24;
+/// How many slots the main program, and each function, has in challenge
+/// mode: a row each, next to its name.
+pub const CHALLENGE_SLOTS: usize = 11;
+pub const CHALLENGE_FN_SLOTS: usize = 8;
 /// The most times a single block can repeat.
 pub const MAX_TIMES: u8 = 9;
 /// A count, inside a function, that means "the number the function was called
@@ -123,7 +127,8 @@ pub enum Sense {
     /// The edge of the map: nothing there at all.
     Edge,
     /// Anything the robot can't drive onto: a rock, a tree, a locked door it
-    /// has no key for, or the edge of the map. Only "repeat until" uses it.
+    /// has no key for, or the edge of the map (but not rain, which passes).
+    /// Only "repeat until" uses it.
     Wall,
 }
 
@@ -920,7 +925,7 @@ pub const CHAPTERS: &[Chapter] = &[
     // "If" blocks inside functions: one function looks around, and the main
     // program says where.
     Chapter {
-        name: "Functions that look",
+        name: "Functions + if",
         levels: &[
             level(
                 "55",
@@ -966,7 +971,7 @@ pub const CHAPTERS: &[Chapter] = &[
     },
     // Say how big each time you call it.
     Chapter {
-        name: "Functions with a number",
+        name: "Function numbers",
         levels: &[
             level(
                 "d78",
@@ -1012,7 +1017,7 @@ pub const CHAPTERS: &[Chapter] = &[
     },
     // Every block so far.
     Chapter {
-        name: "Everything together",
+        name: "All together",
         levels: &[
             level(
                 "59",
@@ -1179,6 +1184,32 @@ impl Level {
         self.tiles.contains(&tile)
     }
 
+    /// The level for challenge mode: every block there is, and plenty of
+    /// room (the main program and two functions, a row each). The "if" can
+    /// look for anything on the map, grass, and the edge.
+    pub fn challenge(&self) -> Level {
+        let mut l = self.clone();
+        let rain = self.tiles.iter().any(|t| matches!(t, Tile::Rain(_)));
+        l.ifs = Sense::ALL
+            .into_iter()
+            .filter(|s| match s {
+                Sense::Tree => self.has(Tile::Tree) || !self.mysteries.is_empty(),
+                Sense::Rock => self.has(Tile::Rock),
+                Sense::Ice => self.has(Tile::Ice),
+                Sense::Key => !self.keys.is_empty(),
+                Sense::Door => self.has(Tile::Door),
+                Sense::Star | Sense::Grass | Sense::Edge => true,
+                Sense::Wall => false,
+            })
+            .collect();
+        (l.chop, l.repeat, l.loops, l.until, l.otherwise) = (true, true, true, true, true);
+        (l.functions, l.fn_slots, l.numbers) = (2, CHALLENGE_FN_SLOTS, true);
+        l.wait = rain;
+        l.slots = CHALLENGE_SLOTS;
+        l.demo = None;
+        l
+    }
+
     /// One way the mysteries can turn out (`true` = tree), with `coin`
     /// tossed for each. With two or more there's always at least one tree and
     /// one patch of grass, so a program that guesses instead of checking
@@ -1270,7 +1301,12 @@ impl World {
             Sense::Door => matches!(self.tile(next), Some(Tile::Door | Tile::Open)),
             Sense::Grass => matches!(self.tile(next), Some(Tile::Grass | Tile::Stump)),
             Sense::Edge => self.tile(next).is_none(),
-            Sense::Wall => !self.can_enter(next),
+            // Rain passes, so it isn't a wall.
+            Sense::Wall => match self.tile(next) {
+                Some(Tile::Door) => self.held == 0,
+                Some(tile) => !tile.passable(),
+                None => true,
+            },
         }
     }
 

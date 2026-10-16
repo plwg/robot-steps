@@ -42,15 +42,15 @@ introduces, in the order programming is usually taught:
     where it started, and still no wall) stops and shakes red
 11. **Functions:** extra strips of blocks named with a shape (● and ▲) that
     the main program calls whenever it needs them
-12. **Functions that look:** "if" blocks inside functions
-13. **Functions with a number:** call ● with a number (set with repeat), and
+12. **Functions + if:** "if" blocks inside functions
+13. **Function numbers:** call ● with a number (set with repeat), and
     inside it a count can be "●'s number" instead of a fixed one, so one
     function makes stairs of 1, 2 and 3
 14. **Rain:** rain clouds count down 3, 2, 1, rain for a bit, then start
     again. Every action takes a tick, so wait for the rain to pass (the wait
     block, repeated like any other) or hurry across before it starts. Being
     under a cloud when it rains is getting wet, and the end of the run
-15. **Everything together**
+15. **All together**
 
 Throughout, a **slider** along the top runs the program ahead of time, while
 it's being built: drag it to see where the robot would be just before any
@@ -72,22 +72,28 @@ to solve it the old way, before moving on to new maps.
 Every action has a sound, and each direction plays its own note, so a
 program plays a little tune. The speaker in the corner turns the sound off.
 
-Three players each have their own robot colour and their own progress. A
-level map shows which levels are finished, and the player's robot waits on
-the next one. The game draws a big, easy-to-spot pointer.
+Three players each have their own robot colour and their own progress. The
+level map shows each chapter as an island, its levels as numbered tiles
+(starred once finished), and the player's robot waits on the next one.
+
+Once every level is finished, a trophy on the map opens **challenge mode**:
+every level again (not the demos), with every block there is and plenty of
+room. Each player's best for each level is kept: the fewest blocks, and the
+fewest turns (actions while it runs), each on its own. The best blocks show
+under each level on the map. The game draws a big, easy-to-spot pointer.
 
 ## Making maps
 
 The pencil button on the level map opens the map maker. Tap the green **+**
 to start a map, then pick a tile on the right (grass, tree, rock, ice, mystery
-cloud, key, door, star or the robot) and tap or drag across the map to paint
-it. Under the map, − and + change its width and height and how many slots
+cloud, key, door, rain cloud, star or the robot) and tap or drag across the
+map to paint it. Tapping a rain cloud again counts it down: 3, 2, 1, 3. Under the map, − and + change its width and height and how many slots
 the program has (and each function, when there are functions). The buttons
-under the tiles choose the blocks it allows: the axe, repeat, loops, "repeat
+under the tiles choose the blocks it allows: the axe, wait, repeat, loops, "repeat
 until", "if", "else", the two functions and numbers for them. Some bring
 others along, as in the game's own levels: loops need repeat; "repeat until"
 and functions need loops; "else" needs an "if"; and numbers need a function.
-Mystery clouds always come with "if" and the axe. The "if" can look for
+Mystery clouds always come with "if" and the axe, and rain clouds with wait. The "if" can look for
 anything painted on the map, grass, and the edge.
 
 Press play to try the map out. The arrow at the top left goes back to

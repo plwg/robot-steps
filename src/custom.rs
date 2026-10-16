@@ -11,13 +11,22 @@ pub const MAX_H: usize = 7;
 /// With functions, every strip is a single row with its name in front.
 const MAX_ROW_SLOTS: usize = 11;
 
-/// What can be painted, as the level text uses it.
-pub const PAINTS: [char; 9] = ['.', '#', '@', '~', '?', 'k', 'D', '*', 'R'];
+/// What can be painted, as the level text uses it. A rain cloud is painted
+/// as `3`; tapping one again counts it down to 2, then 1, then 3 again.
+pub const PAINTS: [char; 10] = ['.', '#', '@', '~', '?', 'k', 'D', '3', '*', 'R'];
+
+/// Can a map's cell hold `c`: something painted, or a rain cloud at any
+/// count?
+fn paintable(c: char) -> bool {
+    PAINTS.contains(&c) || matches!(c, '1' | '2')
+}
 
 /// A block a map can allow.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Tool {
     Axe,
+    /// The wait block. Rain clouds always bring it.
+    Wait,
     Repeat,
     Loops,
     /// "Repeat until there's a wall".
@@ -35,8 +44,9 @@ pub enum Tool {
 impl Tool {
     /// In the order they're shown, and saved: each comes after the blocks it
     /// needs.
-    pub const ALL: [Tool; 9] = [
+    pub const ALL: [Tool; 10] = [
         Tool::Axe,
+        Tool::Wait,
         Tool::Repeat,
         Tool::Loops,
         Tool::Until,
@@ -55,6 +65,7 @@ impl Tool {
             Tool::Until => "until",
             Tool::Else => "else",
             Tool::Numbers => "numbers",
+            Tool::Wait => "wait",
             Tool::If => "if",
             Tool::Fn1 => "fn1",
             Tool::Fn2 => "fn2",
@@ -79,6 +90,7 @@ pub struct CustomMap {
     otherwise: bool,
     functions: usize,
     numbers: bool,
+    wait: bool,
 }
 
 impl CustomMap {
@@ -98,6 +110,7 @@ impl CustomMap {
             otherwise: false,
             functions: 0,
             numbers: false,
+            wait: false,
         };
         map.paint(0, 1, 'R');
         map.paint(5, 2, '*');
@@ -158,6 +171,7 @@ impl CustomMap {
             Tool::Fn1 => self.functions >= 1,
             Tool::Fn2 => self.functions >= 2,
             Tool::Numbers => self.numbers,
+            Tool::Wait => self.wait,
         }
     }
 
@@ -181,6 +195,7 @@ impl CustomMap {
             Tool::Fn1 => self.functions = usize::from(on),
             Tool::Fn2 => self.functions = if on { 2 } else { 1 },
             Tool::Numbers => self.numbers = on,
+            Tool::Wait => self.wait = on,
         }
         if on {
             self.ifs |= self.otherwise;
@@ -243,6 +258,7 @@ impl CustomMap {
         level.otherwise = self.otherwise;
         level.functions = self.functions;
         level.numbers = self.numbers;
+        level.wait = self.wait || self.cells.iter().any(|&c| matches!(c, '1'..='3'));
         level
     }
 }
@@ -290,7 +306,7 @@ pub fn parse(text: &str) -> Vec<CustomMap> {
         };
         for (y, row) in rows.iter().enumerate() {
             for (x, c) in row.chars().enumerate() {
-                if PAINTS.contains(&c) {
+                if paintable(c) {
                     map.paint(x, y, c);
                 }
             }
@@ -363,6 +379,18 @@ mod tests {
         // Old saves had two "if" blocks; either one is the "if" now.
         let old = parse("map slots=4 loops ifstar\nR*\nend\n");
         assert!(old[0].has(Tool::If));
+    }
+
+    #[test]
+    fn rain_clouds_count_down_and_bring_wait() {
+        let mut m = CustomMap::new();
+        m.paint(2, 1, '3');
+        assert!(m.to_level().wait, "rain brings the wait block");
+        let maps = parse(&format(std::slice::from_ref(&m)));
+        assert_eq!(maps[0].get(2, 1), '3');
+        m.paint(2, 1, '1');
+        let maps = parse(&format(std::slice::from_ref(&m)));
+        assert_eq!(maps[0].get(2, 1), '1', "any count is kept");
     }
 
     #[test]
