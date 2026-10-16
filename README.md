@@ -21,12 +21,15 @@ Across 79 levels it introduces:
   block under the pointer takes it out
 - **Actions:** an axe block chops down trees (but not rocks)
 - **Repeat:** run one block several times when there aren't enough slots
-- **Conditionals (first version):** mystery clouds become a tree or grass each
-  run, so the robot has to check before it chops
+- **If:** mystery clouds become a tree or grass each run, so the robot has to
+  look before it chops: "if there's a tree to the right { chop it }". Tap
+  "if", pick what to look for (shown as map tiles: a tree, rock, star, ice,
+  key, door, grass, or the edge of the map, whichever the level offers), then
+  which way. The blocks to run go inside its brackets
 - **Loops:** repeat a whole group of blocks
-- **If blocks:** "if there's a tree to the right { chop it }" or "if there's a
-  star above { fetch it }", with the blocks to run inside brackets. Inside a
-  loop, one rule handles whatever the robot finds, wherever it finds it
+- **If inside loops:** "if there's a tree to the right { chop it }" or "if
+  there's a star above { fetch it }" in a loop: one rule handles whatever the
+  robot finds, wherever it finds it
 - **Functions:** extra strips of blocks named with a shape (● and ▲) that the
   main program calls whenever it needs them
 - **Ice:** the robot slides until grass, a rock or the edge stops it, so it
@@ -66,11 +69,11 @@ cloud, key, door, star or the robot) and tap or drag across the map to paint
 it. Under the map, − and + change its width and height and how many slots
 the program has (and each function, when there are functions). The buttons
 under the tiles choose the blocks it allows: the axe, repeat, loops, "repeat
-until", the two "if" blocks, "else", the two functions and numbers for them.
-Some bring others along, as in the game's own levels: loops need repeat;
-"if" blocks, "repeat until" and functions need loops; "else" needs an "if";
-and numbers need a function.
-Mystery clouds always come with the block that checks them.
+until", "if", "else", the two functions and numbers for them. Some bring
+others along, as in the game's own levels: loops need repeat; "repeat until"
+and functions need loops; "else" needs an "if"; and numbers need a function.
+Mystery clouds always come with "if" and the axe. The "if" can look for
+anything painted on the map, grass, and the edge.
 
 Press play to try the map out. The arrow at the top left goes back to
 everyone's maps, where a map can be played, changed with the pencil, or
@@ -134,10 +137,9 @@ version to GitHub Pages (`.github/workflows/pages.yml`).
 |---|---|
 | Arrows | Add a move |
 | C, then an arrow | Chop that way |
-| Q, then an arrow | If there's a tree that way, chop it |
 | R / 2-9 | Repeat the last block (or loop) |
 | L | Open or close a loop |
-| T / S, then an arrow | Start "if there's a tree / star that way" (again to close) |
+| I, then a choice and an arrow | Start an "if" (again to close) |
 | E | Else, inside an "if" |
 | W, then an arrow | Start "repeat until there's a wall that way" (again to close) |
 | N | In a function, make the last count the function's number |
@@ -164,5 +166,5 @@ Bumping into a rock, a tree, a locked door or the edge of the map stops the
 program; it isn't a harmless "stay put" (unlike sliding on ice into something,
 which is just how the slide stops). The levels depend on this: if bumps did
 nothing, the robot could walk into a wall on purpose to line itself up, and
-some levels could be done without the tool they teach (level 27 without
-checking, 41 without an "if", 45 without a function).
+some levels could be done without the tool they teach (levels 27 and 41
+without an "if", 45 without a function).

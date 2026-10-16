@@ -694,11 +694,13 @@ fn draw_fullscreen_icon(c: Vec2, r: f32, color: Color) {
 enum Button {
     Arrow(Dir),
     Axe,
-    Check,
     Repeat,
     Loop,
-    /// Start (then pick a direction) or end an "if" block.
-    If(Sense),
+    /// Start an "if" block (then pick what it looks for, and which way), or
+    /// end it.
+    If,
+    /// What an "if" looks for, offered after tapping "if".
+    Sense(Sense),
     /// "Otherwise": the blocks after it run when the "if" says no.
     Else,
     /// Start a "repeat until there's a wall" (then pick a direction), or end
@@ -777,7 +779,8 @@ struct Game {
     strips: Vec<Vec<Item>>,
     /// Which strip the buttons add to.
     editing: usize,
-    /// The axe or check button was tapped; the next arrow makes that block.
+    /// The axe was tapped (or "if", and what to look for): the next arrow
+    /// makes that block.
     armed: Option<Button>,
     /// Where the last thing added went, in the strip being edited (it isn't
     /// always the end, when it fills an opened-up slot).
@@ -862,11 +865,11 @@ impl Kind {
             Kind::Ice
         } else if level.functions > 0 {
             Kind::Function
-        } else if level.if_tree || level.if_star {
+        } else if !level.ifs.is_empty() && level.loops {
             Kind::If
         } else if level.loops {
             Kind::Loop
-        } else if level.check {
+        } else if !level.mysteries.is_empty() {
             Kind::Check
         } else if level.repeat {
             Kind::Repeat
@@ -1209,6 +1212,16 @@ impl Game {
         }
     }
 
+    /// Is an "if" being started: tapped, but not finished with a direction?
+    fn armed_if(&self) -> bool {
+        matches!(self.armed, Some(Button::If | Button::Sense(_)))
+    }
+
+    /// Is the player choosing what an "if" looks for?
+    fn picking(&self) -> bool {
+        self.armed == Some(Button::If)
+    }
+
     /// Can the last count be made the function's number? Only in a function,
     /// and not a call's.
     fn can_number(&self) -> bool {
@@ -1221,12 +1234,11 @@ impl Game {
     fn visible(&self, button: Button) -> bool {
         match button {
             Button::Axe => self.level().chop,
-            Button::Check => self.level().check,
+
             Button::Repeat => self.level().repeat,
             Button::Loop => self.level().loops,
-            Button::If(Sense::Tree) => self.level().if_tree,
-            Button::If(Sense::Star) => self.level().if_star,
-            Button::If(Sense::Wall) => false,
+            Button::If => !self.level().ifs.is_empty(),
+            Button::Sense(sense) => self.picking() && self.level().ifs.contains(&sense),
             Button::Else => self.level().otherwise,
             Button::Until => self.level().until,
             Button::Number => self.level().numbers,
@@ -1238,13 +1250,13 @@ impl Game {
     fn enabled(&self, button: Button) -> bool {
         let editing = self.mode == Mode::Edit;
         match button {
-            Button::Arrow(_) | Button::Axe | Button::Check => editing && self.can_place(),
+            Button::Arrow(_) | Button::Axe | Button::Sense(_) => editing && self.can_place(),
             // A loop can hold an "if", but an "if" can't hold a loop.
             Button::Loop => {
                 let open_if = open_if(self.prog()).is_some();
                 editing && (open_loop(self.prog()).is_some() || (self.has_room() && !open_if))
             }
-            Button::If(_) => editing && (self.can_place() || open_if(self.prog()).is_some()),
+            Button::If => editing && (self.can_place() || open_if(self.prog()).is_some()),
             // One "else" per "if", once there's something for the "yes".
             Button::Else => {
                 let items = self.prog();
@@ -1284,8 +1296,7 @@ impl Game {
             Button::Arrow(dir) => {
                 let cmd = match self.armed.take() {
                     Some(Button::Axe) => Cmd::Chop(dir),
-                    Some(Button::Check) => Cmd::IfTreeChop(dir),
-                    Some(Button::If(sense)) => {
+                    Some(Button::Sense(sense)) => {
                         self.insert(Item::IfStart { sense, dir });
                         return;
                     }
@@ -1297,9 +1308,10 @@ impl Game {
                 };
                 self.insert(Item::Block(Block { cmd, times: 1 }));
             }
-            Button::Axe | Button::Check => {
+            Button::Axe => {
                 self.armed = (self.armed != Some(button)).then_some(button);
             }
+            Button::Sense(_) => self.armed = Some(button),
             Button::Repeat => self.set_times(self.next_times()),
             Button::Loop => match open_loop(self.prog()) {
                 // Tapped again straight away: never mind.
@@ -1313,12 +1325,19 @@ impl Game {
                 }
                 None => self.insert(Item::LoopStart { times: 2 }),
             },
-            // With an "if" open, the button closes it; otherwise it's like the
-            // axe: tap it, then pick a direction.
-            Button::If(_) => match open_if(self.prog()) {
+            // With an "if" open, the button closes it. Otherwise tap it, pick
+            // what to look for (straight away if there's only one), then a
+            // direction. Tapping it again while choosing: never mind.
+            Button::If => match open_if(self.prog()) {
                 Some(start) if self.last_added == Some(start) => self.remove_last_added(),
                 Some(_) => self.insert(Item::IfEnd),
-                None => self.armed = (self.armed != Some(button)).then_some(button),
+                None if self.armed_if() => self.armed = None,
+                None => {
+                    self.armed = Some(match self.level().ifs[..] {
+                        [only] => Button::Sense(only),
+                        _ => Button::If,
+                    })
+                }
             },
             // Like a loop, but tap it then pick which way to look.
             Button::Until => match open_loop(self.prog()) {
@@ -1423,12 +1442,12 @@ impl Game {
                     Event::Moved { .. } if self.move_plan().is_some_and(|p| p.slide) => Sfx::Slide,
                     Event::Moved { .. } => Sfx::Step(cmd.dir()),
                     Event::Chopped(_) => Sfx::Chop,
-                    Event::Checked { .. } | Event::Tested { .. } => Sfx::Look,
+                    Event::Tested { .. } => Sfx::Look,
                 });
                 self.set_mode(match event {
                     Event::Moved { .. } => Mode::Moving,
                     Event::Chopped(_) => Mode::Chopping,
-                    Event::Checked { .. } | Event::Tested { .. } => Mode::Checking,
+                    Event::Tested { .. } => Mode::Checking,
                 });
             }
             Err(()) => {
@@ -1441,13 +1460,6 @@ impl Game {
 
     /// The current action has finished: celebrate, or carry on with the program.
     fn finish_action(&mut self) {
-        // Checked and found a tree: now chop it down.
-        if let Some(Event::Checked { at, tree: true }) = self.event {
-            self.event = Some(Event::Chopped(at));
-            self.sfx(Sfx::Chop);
-            self.set_mode(Mode::Chopping);
-            return;
-        }
         if let Some(Event::Moved { star, key, .. }) = self.event {
             let (c, cell) = self.cell_centre(self.world.pos);
             if star {
@@ -1649,11 +1661,9 @@ impl Game {
             (KeyCode::Left, Button::Arrow(Dir::Left)),
             (KeyCode::Right, Button::Arrow(Dir::Right)),
             (KeyCode::C, Button::Axe),
-            (KeyCode::Q, Button::Check),
             (KeyCode::R, Button::Repeat),
             (KeyCode::L, Button::Loop),
-            (KeyCode::T, Button::If(Sense::Tree)),
-            (KeyCode::S, Button::If(Sense::Star)),
+            (KeyCode::I, Button::If),
             (KeyCode::E, Button::Else),
             (KeyCode::W, Button::Until),
             (KeyCode::N, Button::Number),
@@ -1687,14 +1697,28 @@ impl Game {
 
     /// The tool buttons this level has: one row of up to four, or two rows.
     fn tools(&self) -> Vec<Vec<Button>> {
+        // While choosing what an "if" looks for, the choices take the tools'
+        // place.
+        if self.picking() {
+            let senses: Vec<Button> = Sense::ALL
+                .into_iter()
+                .map(Button::Sense)
+                .filter(|&b| self.visible(b))
+                .collect();
+            return match senses.len() {
+                0..=4 => vec![senses],
+                n => {
+                    let (a, b) = senses.split_at(n.div_ceil(2));
+                    vec![a.to_vec(), b.to_vec()]
+                }
+            };
+        }
         let tools: Vec<Button> = [
             Button::Axe,
-            Button::Check,
             Button::Repeat,
             Button::Loop,
             Button::Until,
-            Button::If(Sense::Tree),
-            Button::If(Sense::Star),
+            Button::If,
             Button::Else,
             Button::Call(1),
             Button::Call(2),
@@ -2359,11 +2383,6 @@ impl Game {
             (Mode::Chopping, Some(Event::Chopped(p))) => Some(p),
             _ => None,
         };
-        // The tree being looked at is still standing until the chop starts.
-        let checked_tree = match (self.mode, self.event) {
-            (Mode::Checking, Some(Event::Checked { at, tree: true })) => Some(at),
-            _ => None,
-        };
         for y in 0..l.h {
             for x in 0..l.w {
                 let c = self.cell_centre((x, y)).0;
@@ -2381,9 +2400,6 @@ impl Game {
                             let side = if self.facing == Dir::Left { -1.0 } else { 1.0 };
                             draw_tree(c, cell, 1.0 - fall, side * fall * 1.2);
                         }
-                    }
-                    Some(Tile::Stump) if checked_tree == Some((x, y)) => {
-                        draw_tree(c, cell, 1.0, 0.0)
                     }
                     Some(Tile::Stump) => draw_stump(c, cell),
                     Some(Tile::Mystery) => draw_mystery(c, cell, 1.0, self.time),
@@ -2403,7 +2419,6 @@ impl Game {
         // While checking, a ring shows where the robot is looking. For an
         // "if", it turns green (yes) or grey (no) halfway through.
         let looking = match (self.mode, self.event) {
-            (Mode::Checking, Some(Event::Checked { at, .. })) => Some((at, WHITE)),
             (Mode::Checking, Some(Event::Tested { at, yes })) => {
                 let colour = match (self.timer > self.check_time() * 0.5, yes) {
                     (false, _) => WHITE,
@@ -2609,7 +2624,6 @@ impl Game {
         match cmd {
             Cmd::Move(dir) => dir_color(dir),
             Cmd::Chop(_) => AXE_BROWN,
-            Cmd::IfTreeChop(_) => CHECK_SLATE,
         }
     }
 
@@ -2640,7 +2654,6 @@ impl Game {
             Item::Block(b) => match b.cmd {
                 Cmd::Move(dir) => draw_arrow(r.center(), r.w * 0.8, dir, WHITE),
                 Cmd::Chop(dir) => draw_chop_icon(r.center(), r.w, dir),
-                Cmd::IfTreeChop(dir) => draw_check_icon(r.center(), r.w, dir),
             },
             Item::LoopStart { .. } | Item::LoopEnd | Item::Else | Item::IfEnd | Item::Gap => {}
             Item::IfStart { sense, dir } => draw_if_icon(r.center(), r.w, sense, dir),
@@ -2854,9 +2867,8 @@ impl Game {
             let (colour, round) = match button {
                 Button::Arrow(dir) => (dir_color(dir), 18.0),
                 Button::Axe => (AXE_BROWN, 18.0),
-                Button::Check => (CHECK_SLATE, 18.0),
                 Button::Repeat | Button::Loop => (REPEAT_TEAL, 18.0),
-                Button::If(_) | Button::Else => (IF_LIME, 18.0),
+                Button::If | Button::Sense(_) | Button::Else => (IF_LIME, 18.0),
                 Button::Until => (REPEAT_TEAL, 18.0),
                 Button::Number => (CALL_INK, 18.0),
                 Button::Call(_) => (CALL_INK, 18.0),
@@ -2874,7 +2886,7 @@ impl Game {
             // An open loop or "if" makes its button glow until it's closed.
             let open_loop = match button {
                 Button::Loop | Button::Until => open_loop(self.prog()).is_some(),
-                Button::If(_) => open_if(self.prog()).is_some(),
+                Button::If => open_if(self.prog()).is_some() || self.armed_if(),
                 _ => false,
             };
             if self.armed == Some(button) || open_loop {
@@ -2902,16 +2914,11 @@ impl Game {
             match button {
                 Button::Arrow(dir) => match self.armed {
                     Some(Button::Axe) => draw_chop_icon(c, size, dir),
-                    Some(Button::Check) => draw_check_icon(c, size, dir),
-                    Some(Button::If(sense)) => draw_if_icon(c, size, sense, dir),
+                    Some(Button::Sense(sense)) => draw_if_icon(c, size, sense, dir),
                     Some(Button::Until) => draw_until_icon(c, size, dir),
                     _ => draw_arrow(c, size * 0.8, dir, WHITE),
                 },
                 Button::Axe => draw_axe_badge(c, size * 0.75),
-                Button::Check => {
-                    draw_question(c - vec2(size * 0.14, size * 0.04), 64.0, WHITE);
-                    draw_axe_badge(c + vec2(0.2, 0.18) * size, size * 0.42);
-                }
                 Button::Repeat => {
                     draw_loop_icon(c, half, WHITE);
                     // Show what the next tap will make the last block (or loop).
@@ -2919,11 +2926,21 @@ impl Game {
                 }
                 Button::Call(f) => draw_shape(c, half * 0.55, f),
                 // While an "if" is open, the button shows how to close it.
-                Button::If(_) if open_loop => {
+                Button::If if open_if(self.prog()).is_some() => {
                     let r = Rect::new(c.x - half, c.y - half, size, size);
                     draw_bracket(r, c.x + size * 0.1, false, WHITE);
                 }
-                Button::If(sense) => draw_if_icon(c, size, sense, Dir::Right),
+                // Once chosen, what it'll look for.
+                Button::If => match self.armed {
+                    Some(Button::Sense(sense)) => draw_if_icon(c, size, sense, Dir::Right),
+                    _ => draw_question(c, size * 0.8, WHITE),
+                },
+                // Each choice looks like a tile of the map.
+                Button::Sense(sense) => {
+                    let k = half - 5.0;
+                    rounded_rect(c.x - k, c.y - k, k * 2.0, k * 2.0, 12.0, GRASS);
+                    draw_sense(c, size * 0.95, sense);
+                }
                 Button::Else => draw_answer(c, false),
                 // While a loop is open, the button shows how to close it.
                 Button::Until if open_loop => {
@@ -3171,7 +3188,34 @@ fn draw_sense(c: Vec2, size: f32, sense: Sense) {
     match sense {
         Sense::Tree => draw_tree(c - vec2(0.0, size * 0.12), size, 1.0, 0.0),
         Sense::Star => draw_star(c, size * 0.42, 0.0, STAR),
-        Sense::Wall => draw_rock(c - vec2(0.0, size * 0.2), size * 1.1),
+        Sense::Rock | Sense::Wall => draw_rock(c - vec2(0.0, size * 0.2), size * 1.1),
+        Sense::Ice => {
+            let s = size * 0.8;
+            draw_ice(c.x - s / 2.0, c.y - s / 2.0, s, false);
+        }
+        Sense::Key => draw_key(c, size * 0.8, GOLD),
+        Sense::Door => draw_door(c, size * 0.85, 0.0),
+        Sense::Grass => {
+            let s = size * 0.8;
+            rounded_rect(c.x - s / 2.0, c.y - s / 2.0, s, s, s * 0.15, GRASS);
+            // Tufts of grass.
+            let blade = darker(GRASS_DARK, 0.7);
+            for k in [-0.25, 0.0, 0.25] {
+                let x = c.x + k * s;
+                let y = c.y + s * 0.22;
+                for lean in [-0.1, 0.0, 0.1] {
+                    draw_line(x, y, x + lean * s, y - s * 0.35, s * 0.07, blade);
+                }
+            }
+        }
+        // The edge of the map: grass that stops, and nothing beyond.
+        Sense::Edge => {
+            let s = size * 0.8;
+            let (x, y) = (c.x - s / 2.0, c.y - s / 2.0);
+            draw_rectangle(x, y, s / 2.0, s, GRASS);
+            draw_rectangle(c.x, y, s / 2.0, s, INK);
+            draw_line(c.x, y, c.x, y + s, s * 0.08, GRASS_DARK);
+        }
     }
 }
 
@@ -3222,12 +3266,6 @@ fn draw_answer(c: Vec2, yes: bool) {
 fn draw_chop_icon(c: Vec2, size: f32, dir: Dir) {
     draw_arrow(c + vec2(0.08, 0.08) * size, size * 0.62, dir, WHITE);
     draw_axe_badge(c - vec2(0.24, 0.24) * size, size * 0.42);
-}
-
-/// "If there's a tree that way, chop it": an arrow with a question mark.
-fn draw_check_icon(c: Vec2, size: f32, dir: Dir) {
-    draw_arrow(c + vec2(0.08, 0.08) * size, size * 0.62, dir, WHITE);
-    draw_question(c - vec2(0.22, 0.2) * size, size * 0.62, WHITE);
 }
 
 /// The axe as drawn on the axe button, for use as a small badge.

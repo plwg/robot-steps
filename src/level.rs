@@ -65,14 +65,12 @@ impl Tile {
 pub enum Cmd {
     Move(Dir),
     Chop(Dir),
-    /// The conditional: if there's a tree that way, chop it; otherwise do nothing.
-    IfTreeChop(Dir),
 }
 
 impl Cmd {
     pub fn dir(self) -> Dir {
         match self {
-            Cmd::Move(d) | Cmd::Chop(d) | Cmd::IfTreeChop(d) => d,
+            Cmd::Move(d) | Cmd::Chop(d) => d,
         }
     }
 }
@@ -88,10 +86,48 @@ pub struct Block {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Sense {
     Tree,
+    Rock,
     Star,
+    Ice,
+    Key,
+    /// A door, locked or open.
+    Door,
+    /// Grass (or a stump), with or without a star or key on it.
+    Grass,
+    /// The edge of the map: nothing there at all.
+    Edge,
     /// Anything the robot can't drive onto: a rock, a tree, a locked door it
-    /// has no key for, or the edge of the map.
+    /// has no key for, or the edge of the map. Only "repeat until" uses it.
     Wall,
+}
+
+impl Sense {
+    /// Everything an "if" can look for, in the order it's offered.
+    pub const ALL: [Sense; 8] = [
+        Sense::Tree,
+        Sense::Rock,
+        Sense::Star,
+        Sense::Ice,
+        Sense::Key,
+        Sense::Door,
+        Sense::Grass,
+        Sense::Edge,
+    ];
+
+    /// Its letter after `{` in program text.
+    fn letter(self) -> char {
+        match self {
+            Sense::Tree => 't',
+            Sense::Rock => 'r',
+            Sense::Star => 's',
+            Sense::Ice => 'i',
+            Sense::Key => 'k',
+            Sense::Door => 'd',
+            Sense::Grass => 'g',
+            Sense::Edge => 'e',
+            Sense::Wall => 'w',
+        }
+    }
 }
 
 /// One slot in a program strip: a block, one end of a loop or an "if", or a
@@ -327,11 +363,10 @@ impl Runner<'_> {
 }
 
 /// A whole program written as text: strips separated by `|`. Within a strip,
-/// `R` moves right, `cR` chops right, `?R` checks right, and a number repeats
-/// a block. `[` opens a loop and `]4` closes it, running it 4 times; `<R`
+/// `R` moves right, `cR` chops right, and a number repeats a block. `[` opens a loop and `]4` closes it, running it 4 times; `<R`
 /// opens a loop that runs until there's a wall to the right, closed with `]`.
 /// `{tR` starts "if there's a tree to the right", `{sU` "if there's a star
-/// above", `/` is "else" and `}` ends it. `f1` calls the first function, and
+/// above" (see `Sense::letter` for the rest), `/` is "else" and `}` ends it. `f1` calls the first function, and
 /// `f1n3` calls it with the number 3; inside a function, `#` in place of a
 /// count (`R#`, `]#`) means that number.
 pub fn parse_strips(text: &str) -> Vec<Vec<Item>> {
@@ -377,11 +412,10 @@ pub fn parse_program(text: &str) -> Vec<Item> {
                 Item::Until { dir: dir(d) }
             }
             (Some('{'), Some(what)) => Item::IfStart {
-                sense: if what == 't' {
-                    Sense::Tree
-                } else {
-                    Sense::Star
-                },
+                sense: *Sense::ALL
+                    .iter()
+                    .find(|s| s.letter() == what)
+                    .expect("bad sense"),
                 dir: dir(chars.next().expect("{ needs a direction")),
             },
             (Some('['), None) => {
@@ -397,10 +431,6 @@ pub fn parse_program(text: &str) -> Vec<Item> {
             }
             (Some('c'), Some(d)) => Item::Block(Block {
                 cmd: Cmd::Chop(dir(d)),
-                times,
-            }),
-            (Some('?'), Some(d)) => Item::Block(Block {
-                cmd: Cmd::IfTreeChop(dir(d)),
                 times,
             }),
             (Some(d), None) => Item::Block(Block {
@@ -422,11 +452,9 @@ pub struct LevelDef {
     slots: usize,
     chop: bool,
     repeat: bool,
-    check: bool,
     loops: bool,
-    /// Which "if" blocks the level has: looking for trees, and for stars.
-    if_tree: bool,
-    if_star: bool,
+    /// What the "if" block can look for (none: no "if" block).
+    ifs: &'static [Sense],
     /// "Repeat until there's a wall", and "else" for the "if" blocks.
     until: bool,
     otherwise: bool,
@@ -446,10 +474,8 @@ const fn level(map: &'static [&'static str]) -> LevelDef {
         slots: MAX_PROGRAM,
         chop: false,
         repeat: false,
-        check: false,
         loops: false,
-        if_tree: false,
-        if_star: false,
+        ifs: &[],
         until: false,
         otherwise: false,
         functions: 0,
@@ -480,11 +506,15 @@ impl LevelDef {
         self.with_repeat(slots)
     }
 
-    /// Unlock "if" blocks (and loops) that look for trees and/or stars, and
-    /// limit the program to `slots`, so an "if" in a loop is needed to fit.
+    /// Unlock the "if" block (and loops), looking for trees and/or stars,
+    /// and limit the program to `slots`, so an "if" in a loop is needed to
+    /// fit.
     const fn with_ifs(mut self, slots: usize, tree: bool, star: bool) -> Self {
-        self.if_tree = tree;
-        self.if_star = star;
+        self.ifs = match (tree, star) {
+            (true, false) => &[Sense::Tree],
+            (false, true) => &[Sense::Star],
+            _ => &[Sense::Tree, Sense::Star],
+        };
         self.with_loops(slots)
     }
 
@@ -521,10 +551,11 @@ impl LevelDef {
         self
     }
 
-    /// Unlock the "if tree, chop" block (and the axe).
-    const fn with_check(mut self) -> Self {
+    /// Unlock the "if" block looking for trees, and the axe: for mystery
+    /// clouds, "if there's a tree that way { chop it }".
+    const fn with_tree_if(mut self) -> Self {
         self.chop = true;
-        self.check = true;
+        self.ifs = &[Sense::Tree];
         self
     }
 }
@@ -589,18 +620,18 @@ pub const LEVELS: &[LevelDef] = &[
     level(&["R.#.", "@@#@", "*..."]).with_axe(),
     level(&["R.......", "#######.", "........", ".#######", "*......."]).with_repeat(5),
     // --- If: mystery clouds turn into a tree or grass each time you press
-    // play, so the robot has to check before it chops ---
-    level(&["R", "?", "*"]).with_check().demo("?D D D"),
-    level(&["R?*"]).with_check(),
-    level(&["R.?.*"]).with_check(),
-    level(&["R?@", "@.@", "@?*"]).with_check(),
-    level(&["@@@@@@", "R?.?.*", "@@@@@@"]).with_check(),
-    level(&["*?.R.?*"]).with_check(),
-    level(&["R.?.@*", "@@.@@?", "*?...."]).with_check(),
+    // play, so the robot has to look before it chops ---
+    level(&["R", "?", "*"]).with_tree_if().demo("{tD cD } D D"),
+    level(&["R?*"]).with_tree_if(),
+    level(&["R.?.*"]).with_tree_if(),
+    level(&["R?@", "@.@", "@?*"]).with_tree_if(),
+    level(&["@@@@@@", "R?.?.*", "@@@@@@"]).with_tree_if(),
+    level(&["*?.R.?*"]).with_tree_if(),
+    level(&["R.?.@*", "@@.@@?", "*?...."]).with_tree_if(),
     // --- If and repeat together ---
-    level(&["R...?...*"]).with_check().with_repeat(3),
+    level(&["R...?...*"]).with_tree_if().with_repeat(4),
     level(&["R..?..#..", "@@@@@@@@.", "*..?..?.."])
-        .with_check()
+        .with_tree_if()
         .with_repeat(14),
     // --- Loops: repeat a whole group of blocks. First two familiar maps
     // (levels 7 and 11) with too few slots to do them the old way ---
@@ -652,11 +683,11 @@ pub const LEVELS: &[LevelDef] = &[
     level(&["*@@*@*", ".@@.@.", "R.##.#"])
         .with_axe()
         .with_functions(6, 2, 3),
-    // --- Loops through the mystery clouds: check, then step ---
-    level(&["R?.?.?.?*"]).with_check().with_loops(3),
+    // --- Loops through the mystery clouds: look, chop if it's a tree, then step ---
+    level(&["R?.?.?.?*"]).with_tree_if().with_loops(3),
     level(&["R?@@@", "@.?@@", "@@.?@", "@@@.?", "@@@@*"])
-        .with_check()
-        .with_loops(3),
+        .with_tree_if()
+        .with_loops(4),
     // --- If, on paths that turn ---
     level(&["R#@@@", "@..@@", "@@#.@", "@@@*#", "@@@@*"])
         .with_axe()
@@ -688,7 +719,7 @@ pub const LEVELS: &[LevelDef] = &[
         "@@@@@@@@.@@@@",
         "@@@@@@@@...?*",
     ])
-    .with_check()
+    .with_tree_if()
     .with_functions(3, 1, 3),
     // --- Functions with "if" blocks inside: one function looks around, and
     // the main program says where ---
@@ -793,10 +824,9 @@ pub struct Level {
     pub slots: usize,
     pub chop: bool,
     pub repeat: bool,
-    pub check: bool,
     pub loops: bool,
-    pub if_tree: bool,
-    pub if_star: bool,
+    /// What the "if" block can look for (none: no "if" block).
+    pub ifs: Vec<Sense>,
     pub until: bool,
     pub otherwise: bool,
     pub functions: usize,
@@ -819,10 +849,8 @@ impl Level {
         level.slots = def.slots;
         level.chop = def.chop;
         level.repeat = def.repeat;
-        level.check = def.check;
         level.loops = def.loops;
-        level.if_tree = def.if_tree;
-        level.if_star = def.if_star;
+        level.ifs = def.ifs.to_vec();
         level.until = def.until;
         level.otherwise = def.otherwise;
         level.functions = def.functions;
@@ -873,10 +901,8 @@ impl Level {
             slots: MAX_PROGRAM,
             chop: false,
             repeat: false,
-            check: false,
             loops: false,
-            if_tree: false,
-            if_star: false,
+            ifs: Vec::new(),
             until: false,
             otherwise: false,
             functions: 0,
@@ -965,11 +991,6 @@ pub enum Event {
         unlocked: bool,
     },
     Chopped(Pos),
-    /// Looked at `at` for a tree (and chopped it if there was one).
-    Checked {
-        at: Pos,
-        tree: bool,
-    },
     /// An "if" looked at `at`: `yes` if it saw what it was looking for. (The
     /// game uses this for its animation; `World::act` never returns it.)
     Tested {
@@ -1000,7 +1021,13 @@ impl World {
         let next = (self.pos.0 + dx, self.pos.1 + dy);
         match sense {
             Sense::Tree => self.tile(next) == Some(Tile::Tree),
+            Sense::Rock => self.tile(next) == Some(Tile::Rock),
             Sense::Star => self.stars.contains(&next),
+            Sense::Ice => self.tile(next) == Some(Tile::Ice),
+            Sense::Key => self.keys.contains(&next),
+            Sense::Door => matches!(self.tile(next), Some(Tile::Door | Tile::Open)),
+            Sense::Grass => matches!(self.tile(next), Some(Tile::Grass | Tile::Stump)),
+            Sense::Edge => self.tile(next).is_none(),
             Sense::Wall => !self.can_enter(next),
         }
     }
@@ -1069,13 +1096,6 @@ impl World {
                 self.tiles[(next.1 * self.w + next.0) as usize] = Tile::Stump;
                 Ok(Event::Chopped(next))
             }
-            (Cmd::IfTreeChop(_), tile) => {
-                let tree = tile == Some(Tile::Tree);
-                if tree {
-                    self.tiles[(next.1 * self.w + next.0) as usize] = Tile::Stump;
-                }
-                Ok(Event::Checked { at: next, tree })
-            }
             _ => Err(()),
         }
     }
@@ -1096,10 +1116,10 @@ pub fn all_levels() -> Vec<Level> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::{HashMap, HashSet, VecDeque};
+    use std::collections::{HashMap, HashSet};
 
     /// Known solutions for the loop levels (too many loop programs to search).
-    /// `R` move right, `cR` chop right, `?R` check right, a number repeats a
+    /// `R` move right, `cR` chop right, a number repeats a
     /// block, `[` opens a loop and `]4` closes it, running it 4 times.
     const LOOP_SOLUTIONS: &[(usize, &str)] = &[
         (35, "[ R D ]3"),
@@ -1108,8 +1128,6 @@ mod tests {
         (38, "[ R2 D ]3 R2"),
         (39, "[ U2 R2 D2 R2 ]2 U2 R2"),
         (40, "[ cR R2 ]4"),
-        (49, "[ ?R R2 ]4"),
-        (50, "[ ?R R D ]4"),
         (73, "[ R U D R2 ]3"),
     ];
 
@@ -1128,7 +1146,7 @@ mod tests {
         (48, "f1 f2 f2 f1 f2 f1 | U2 D2 R | cR R"),
         (53, "f1 f2 f1 f2 | [ R U ]3 | [ R D ]3"),
         (54, "f1 D2 f2 D2 f1 D | [ cR R ]4 | [ cL L ]4"),
-        (55, "[ f1 D2 ]3 | [ ?R R ]4"),
+        (55, "[ f1 D2 ]3 | [ {tR cR } R ]4"),
         (56, "[ f1 R ]5 D3 [ f1 L ]5 | {sU U D } {sD D U }"),
         (57, "f1 D2 f1 D2 f1 | [ {sU U D } R ]4"),
         (
@@ -1152,6 +1170,9 @@ mod tests {
         (41, "[ {tR cR } R ]9"),
         (42, "[ {sU U D } R ]8"),
         (43, "[ {tR cR } {sU U D } R ]8"),
+        // Through the mystery clouds: look, chop if it's a tree, then step.
+        (49, "[ {tR cR } R2 ]4"),
+        (50, "[ {tR cR } R D ]4"),
         (51, "[ {tR cR } R {tD cD } D ]4"),
         (52, "[ {sD D U } R2 D ]5"),
         // `/` is "else".
@@ -1188,10 +1209,9 @@ mod tests {
                     "demo d{n}: functions can't call functions"
                 );
             }
-            assert_eq!(
-                level.check,
-                !level.mysteries.is_empty(),
-                "demo d{n}: mysteries and the check block go together"
+            assert!(
+                level.mysteries.is_empty() || level.ifs.contains(&Sense::Tree),
+                "demo d{n}: mysteries need an \"if\" that looks for trees"
             );
             assert!(always_wins(level, strips), "demo d{n} doesn't win");
         }
@@ -1237,7 +1257,7 @@ mod tests {
         let loop_levels: Vec<usize> = (1..=levels.len())
             .filter(|&n| {
                 let l = &levels[n - 1];
-                l.loops && l.functions == 0 && !l.if_tree && !l.if_star && !l.until
+                l.loops && l.functions == 0 && l.ifs.is_empty() && !l.until
             })
             .collect();
         let solved: Vec<usize> = LOOP_SOLUTIONS.iter().map(|&(n, _)| n).collect();
@@ -1320,32 +1340,57 @@ mod tests {
     /// search that gives up on any program whose first run already bumps into
     /// something, and never searches on from a position it has already
     /// reached using no more tiles.
+    /// (If the level can, it also tries "if there's a tree, chop it", as one
+    /// piece: see `fits_with`.)
     fn fits_with_loops(level: &Level, slots: usize) -> Option<Vec<Item>> {
-        fits_with(level, slots, &[])
+        fits_with(level, slots, &[], true)
     }
 
-    /// The same, with "if" blocks (but no "else") inside the loops too: any
-    /// of `ifs`, each an `IfStart`.
-    fn fits_with(level: &Level, slots: usize, ifs: &[Item]) -> Option<Vec<Item>> {
-        let mut blocks = Vec::new();
+    /// "If there's a tree that way { chop it }", the way through a mystery
+    /// cloud: two tiles.
+    fn if_chop(dir: Dir) -> [Item; 3] {
+        [
+            Item::IfStart {
+                sense: Sense::Tree,
+                dir,
+            },
+            Item::Block(Block {
+                cmd: Cmd::Chop(dir),
+                times: 1,
+            }),
+            Item::IfEnd,
+        ]
+    }
+
+    /// Can the level use `if_chop`?
+    fn can_if_chop(level: &Level) -> bool {
+        level.chop && level.ifs.contains(&Sense::Tree)
+    }
+
+    /// The same as `fits_with_loops`, with any "if" blocks in `ifs` (each an
+    /// `IfStart`, with no "else") inside the loops too, and `if_chop` pieces
+    /// if `chop_trees` and the level can.
+    fn fits_with(level: &Level, slots: usize, ifs: &[Item], chop_trees: bool) -> Option<Vec<Item>> {
+        let mut blocks: Vec<Vec<Item>> = Vec::new();
         for dir in Dir::ALL {
             let mut cmds = vec![Cmd::Move(dir)];
             if level.chop {
                 cmds.push(Cmd::Chop(dir));
             }
-            if level.check {
-                cmds.push(Cmd::IfTreeChop(dir));
-            }
             for cmd in cmds {
                 for times in 1..=MAX_TIMES {
-                    blocks.push(Item::Block(Block { cmd, times }));
+                    blocks.push(vec![Item::Block(Block { cmd, times })]);
                 }
+            }
+            if chop_trees && can_if_chop(level) {
+                blocks.push(if_chop(dir).to_vec());
             }
         }
 
         struct Search<'a> {
             level: &'a Level,
-            blocks: Vec<Item>,
+            /// Blocks, and pieces of a few items that go in together.
+            blocks: Vec<Vec<Item>>,
             ifs: &'a [Item],
             slots: usize,
             /// Positions already searched from (with no loop open), and the
@@ -1382,20 +1427,24 @@ mod tests {
                 if used == self.slots {
                     return false;
                 }
+                // An "if" can't go inside another one.
+                let open_if = items
+                    .iter()
+                    .rposition(|i| matches!(i, Item::IfStart { .. }))
+                    .filter(|&k| !items[k..].contains(&Item::IfEnd));
                 for b in 0..self.blocks.len() {
-                    let block = self.blocks[b];
-                    if self.try_item(items, block, open) {
+                    let block = self.blocks[b].clone();
+                    let has_if = block.iter().any(|i| matches!(i, Item::IfStart { .. }));
+                    if has_if && open_if.is_some() {
+                        continue;
+                    }
+                    if self.try_items(items, &block, open) {
                         return true;
                     }
                 }
                 // Inside a loop, start an "if", or end one with something in
                 // it. (One left open ends with the loop.)
-                if let Some(start) = open {
-                    let open_if = items[start..]
-                        .iter()
-                        .rposition(|i| matches!(i, Item::IfStart { .. }))
-                        .map(|k| start + k)
-                        .filter(|&k| !items[k..].contains(&Item::IfEnd));
+                if open.is_some() {
                     match open_if {
                         None => {
                             for &start_if in self.ifs {
@@ -1435,13 +1484,26 @@ mod tests {
             }
 
             fn try_item(&mut self, items: &mut Vec<Item>, item: Item, open: Option<usize>) -> bool {
-                items.push(item);
+                self.try_items(items, &[item], open)
+            }
+
+            fn try_items(
+                &mut self,
+                items: &mut Vec<Item>,
+                add: &[Item],
+                open: Option<usize>,
+            ) -> bool {
+                let len = items.len();
+                if tiles(items) + tiles(add) > self.slots {
+                    return false;
+                }
+                items.extend_from_slice(add);
                 let found = match run(self.level, items) {
                     Some(worlds) => self.from(items, open, worlds),
                     None => false,
                 };
                 if !found {
-                    items.pop();
+                    items.truncate(len);
                 }
                 found
             }
@@ -1480,7 +1542,7 @@ mod tests {
         let if_levels: Vec<usize> = (1..=levels.len())
             .filter(|&n| {
                 let l = &levels[n - 1];
-                (l.if_tree || l.if_star) && l.functions == 0
+                !l.ifs.is_empty() && l.loops && l.functions == 0
             })
             .collect();
         let solved: Vec<usize> = IF_SOLUTIONS.iter().map(|&(n, _)| n).collect();
@@ -1502,20 +1564,11 @@ mod tests {
             if level.otherwise {
                 let mut ifs = Vec::new();
                 for dir in Dir::ALL {
-                    if level.if_tree {
-                        ifs.push(Item::IfStart {
-                            sense: Sense::Tree,
-                            dir,
-                        });
-                    }
-                    if level.if_star {
-                        ifs.push(Item::IfStart {
-                            sense: Sense::Star,
-                            dir,
-                        });
+                    for &sense in &level.ifs {
+                        ifs.push(Item::IfStart { sense, dir });
                     }
                 }
-                if let Some(program) = fits_with(level, level.slots, &ifs) {
+                if let Some(program) = fits_with(level, level.slots, &ifs, true) {
                     panic!("level {} fits without else: {program:?}", i + 1);
                 }
             }
@@ -1566,7 +1619,7 @@ mod tests {
                 });
             }
         }
-        assert!(!level.chop && !level.check, "only moves are tried");
+        assert!(!level.chop && level.ifs.is_empty(), "only moves are tried");
         let mut functions: Vec<Vec<Block>> = blocks.iter().map(|&b| vec![b]).collect();
         for len in 1..level.fn_slots {
             let longer: Vec<Vec<Block>> = functions
@@ -1694,10 +1747,24 @@ mod tests {
     #[test]
     fn if_levels_need_an_if() {
         for (i, level) in numbered().iter().enumerate() {
-            if (level.if_tree || level.if_star)
-                && let Some(program) = fits_with_loops(level, level.slots)
-            {
-                panic!("level {} fits without an if: {program:?}", i + 1);
+            if level.ifs.is_empty() {
+                continue;
+            }
+            if level.loops {
+                if let Some(program) = fits_with(level, level.slots, &[], false) {
+                    panic!("level {} fits without an if: {program:?}", i + 1);
+                }
+            } else {
+                let allow = Allow {
+                    if_chop: false,
+                    ..Allow::level(level)
+                };
+                assert_eq!(
+                    fewest_blocks(level, allow),
+                    None,
+                    "level {} can be done without an if",
+                    i + 1
+                );
             }
         }
     }
@@ -1822,7 +1889,8 @@ mod tests {
     struct Allow {
         repeat: bool,
         chop: bool,
-        check: bool,
+        /// "If there's a tree that way { chop it }" (two tiles).
+        if_chop: bool,
     }
 
     impl Allow {
@@ -1830,20 +1898,22 @@ mod tests {
             Allow {
                 repeat: level.repeat,
                 chop: level.chop,
-                check: level.check,
+                if_chop: can_if_chop(level),
             }
         }
     }
 
-    /// Fewest blocks in a single program that collects every star however the
-    /// mysteries turn out (breadth-first search over every block allowed).
+    /// Fewest tiles in a single program of blocks (and "if tree, chop" pieces)
+    /// that collects every star however the mysteries turn out: a search
+    /// outwards, a tile at a time, over every block allowed.
     fn fewest_blocks(level: &Level, allow: Allow) -> Option<usize> {
-        let mut cmds: Vec<Cmd> = Dir::ALL.map(Cmd::Move).to_vec();
+        // A block (`Ok`), or "if there's a tree that way, chop it" (`Err`).
+        let mut steps: Vec<Result<Cmd, Dir>> = Dir::ALL.map(|d| Ok(Cmd::Move(d))).to_vec();
         if allow.chop {
-            cmds.extend(Dir::ALL.map(Cmd::Chop));
+            steps.extend(Dir::ALL.map(|d| Ok(Cmd::Chop(d))));
         }
-        if allow.check {
-            cmds.extend(Dir::ALL.map(Cmd::IfTreeChop));
+        if allow.if_chop {
+            steps.extend(Dir::ALL.map(Err));
         }
         let max_times = if allow.repeat { MAX_TIMES } else { 1 };
 
@@ -1855,32 +1925,63 @@ mod tests {
             .iter()
             .map(|o| Some(level.revealed(o)))
             .collect();
-        let mut seen = HashSet::from([start.clone()]);
-        let mut queue = VecDeque::from([(start, 0)]);
-        while let Some((worlds, blocks)) = queue.pop_front() {
-            for &cmd in &cmds {
-                let mut next = worlds.clone();
-                'reps: for _ in 0..max_times {
-                    for slot in next.iter_mut() {
-                        if let Some(world) = slot {
-                            if world.act(cmd).is_err() {
+        // Positions to search on from, by how many tiles it took to get
+        // there; a piece takes one tile or two, so the cheapest come first.
+        let mut best = HashMap::from([(start.clone(), 0)]);
+        let mut by_cost: Vec<Vec<Worlds>> = vec![vec![start]];
+        let mut won: Option<usize> = None;
+        let mut cost = 0;
+        while cost < by_cost.len() {
+            // Every cheaper way has been tried.
+            if won.is_some_and(|w| w <= cost) {
+                return won;
+            }
+            for worlds in std::mem::take(&mut by_cost[cost]) {
+                if best[&worlds] < cost {
+                    continue;
+                }
+                for &step in &steps {
+                    let (tiles, times) = match step {
+                        Ok(_) => (1, max_times),
+                        Err(_) => (2, 1),
+                    };
+                    let mut next = worlds.clone();
+                    'reps: for _ in 0..times {
+                        for world in next.iter_mut().flatten() {
+                            let did = match step {
+                                Ok(cmd) => world.act(cmd).map(|_| ()),
+                                Err(dir) if world.sees(Sense::Tree, dir) => {
+                                    world.act(Cmd::Chop(dir)).map(|_| ())
+                                }
+                                Err(_) => Ok(()),
+                            };
+                            if did.is_err() {
                                 break 'reps;
                             }
-                            if world.stars.is_empty() {
+                        }
+                        for slot in next.iter_mut() {
+                            if slot.as_ref().is_some_and(|w| w.stars.is_empty()) {
                                 *slot = None;
                             }
                         }
-                    }
-                    if next.iter().all(Option::is_none) {
-                        return Some(blocks + 1);
-                    }
-                    if seen.insert(next.clone()) {
-                        queue.push_back((next.clone(), blocks + 1));
+                        let total = cost + tiles;
+                        if next.iter().all(Option::is_none) {
+                            won = Some(won.map_or(total, |w| w.min(total)));
+                            break 'reps;
+                        }
+                        if best.get(&next).is_none_or(|&b| total < b) {
+                            best.insert(next.clone(), total);
+                            if by_cost.len() <= total {
+                                by_cost.resize(total + 1, Vec::new());
+                            }
+                            by_cost[total].push(next.clone());
+                        }
                     }
                 }
             }
+            cost += 1;
         }
-        None
+        won
     }
 
     #[test]
@@ -1889,12 +1990,11 @@ mod tests {
             let n = i + 1;
             assert!(!level.stars.is_empty(), "level {n} has no stars");
             assert!(level.slots <= MAX_PROGRAM, "level {n} has too many slots");
-            // Clouds need a way to deal with them: checking, or going on
-            // until the robot gets to them.
-            assert_eq!(
-                level.check || level.until,
-                !level.mysteries.is_empty(),
-                "level {n}: mysteries and the check block go together"
+            // Clouds need a way to deal with them: looking for a tree, or
+            // going on until the robot gets to them.
+            assert!(
+                level.mysteries.is_empty() || level.ifs.contains(&Sense::Tree) || level.until,
+                "level {n}: mysteries need a way to look at them"
             );
             // "Repeat until" levels can only be done with one; their known
             // solutions are checked in `until_levels_have_a_solution_that_fits`.
@@ -1933,9 +2033,10 @@ mod tests {
     #[test]
     fn axe_levels_need_the_axe() {
         for (i, level) in numbered().iter().enumerate() {
-            if level.chop && !level.check {
+            if level.chop {
                 let allow = Allow {
                     chop: false,
+                    if_chop: false,
                     ..Allow::level(level)
                 };
                 assert_eq!(
@@ -1949,17 +2050,17 @@ mod tests {
     }
 
     #[test]
-    fn check_levels_need_the_check() {
+    fn cloud_levels_need_to_look() {
         for (i, level) in numbered().iter().enumerate() {
-            if level.check {
+            if !level.mysteries.is_empty() {
                 let allow = Allow {
-                    check: false,
+                    if_chop: false,
                     ..Allow::level(level)
                 };
                 assert_eq!(
                     fewest_blocks(level, allow),
                     None,
-                    "level {} can be done without checking",
+                    "level {} can be done without looking",
                     i + 1
                 );
             }
@@ -1968,9 +2069,9 @@ mod tests {
 
     #[test]
     fn mysteries_always_include_a_tree_and_grass() {
-        let pair = Level::parse(&level(&["R??"]).with_check());
+        let pair = Level::parse(&level(&["R??"]).with_tree_if());
         assert_eq!(pair.outcomes().len(), 2);
-        let single = Level::parse(&level(&["R?"]).with_check());
+        let single = Level::parse(&level(&["R?"]).with_tree_if());
         assert_eq!(single.outcomes(), vec![vec![false], vec![true]]);
         // Two trees can't happen, so it tosses again.
         let mut tosses = [true, true, true, false].into_iter();
@@ -1984,26 +2085,12 @@ mod tests {
     }
 
     #[test]
-    fn robot_bumps_chops_and_checks() {
+    fn robot_bumps_and_chops() {
         let mut world = Level::parse(&level(&["R#", ".@"])).world();
         assert!(world.act(Cmd::Move(Dir::Right)).is_err());
         assert!(world.act(Cmd::Move(Dir::Up)).is_err());
         assert!(world.act(Cmd::Chop(Dir::Down)).is_err(), "can't chop grass");
-        assert_eq!(
-            world.act(Cmd::IfTreeChop(Dir::Down)),
-            Ok(Event::Checked {
-                at: (0, 1),
-                tree: false
-            }),
-            "checking grass is fine"
-        );
-        assert_eq!(
-            world.act(Cmd::IfTreeChop(Dir::Right)),
-            Ok(Event::Checked {
-                at: (1, 0),
-                tree: true
-            })
-        );
+        assert_eq!(world.act(Cmd::Chop(Dir::Right)), Ok(Event::Chopped((1, 0))));
         assert!(
             world.act(Cmd::Move(Dir::Right)).is_ok(),
             "stumps are passable"
