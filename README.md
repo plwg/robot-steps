@@ -25,7 +25,9 @@ Across 48 levels it introduces:
 Each new tool starts on a map from earlier in the game, with too few slots
 to solve it the old way, before moving on to new maps.
 
-Finished levels are saved, and the game carries on from the first unfinished one.
+Three players each have their own robot colour and their own progress. A
+level map shows which levels are finished, and the player's robot waits on
+the next one. The game draws a big, easy-to-spot pointer.
 
 ## Running
 
@@ -65,6 +67,9 @@ Under WSL the game runs on the GPU, but WSL caps full screen at 4K to about
 | Tab | Switch between the main program and the functions |
 | Space / Enter | Play or stop |
 | Backspace / Delete | Undo / clear |
+| 1 / 2 / 3 | Pick a player |
+| Enter (on the map) | Play the next unfinished level |
+| M | Back to the map |
 | F11 | Toggle full screen |
 
 ## Levels

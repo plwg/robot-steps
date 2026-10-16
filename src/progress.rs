@@ -1,38 +1,51 @@
-//! Which levels have been finished, saved between games as a list of level
-//! numbers in a small text file.
+//! Which levels have been finished, for each of the three players, saved
+//! between games as a list of level numbers in a small text file per player.
 
 use std::path::PathBuf;
 
-/// `%APPDATA%\RobotSteps\progress.txt` on Windows, otherwise
-/// `~/.local/share/robot_steps/progress.txt`.
-fn path() -> Option<PathBuf> {
-    let dir = match std::env::var_os("APPDATA") {
-        Some(appdata) => PathBuf::from(appdata).join("RobotSteps"),
+/// How many players (save slots) there are.
+pub const SLOTS: usize = 3;
+
+/// The folder the saves live in: `%APPDATA%\RobotSteps` on Windows,
+/// otherwise `~/.local/share/robot_steps`.
+fn dir() -> Option<PathBuf> {
+    match std::env::var_os("APPDATA") {
+        Some(appdata) => Some(PathBuf::from(appdata).join("RobotSteps")),
         None => {
             let data = std::env::var_os("XDG_DATA_HOME")
                 .map(PathBuf::from)
                 .or_else(|| {
                     std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/share"))
                 })?;
-            data.join("robot_steps")
+            Some(data.join("robot_steps"))
         }
-    };
-    Some(dir.join("progress.txt"))
+    }
 }
 
-/// Finished levels, one flag per level. Missing or unreadable progress just
-/// means nothing is finished yet.
-pub fn load(levels: usize) -> Vec<bool> {
-    let text = path()
-        .and_then(|p| std::fs::read_to_string(p).ok())
+/// `progress-1.txt` to `progress-3.txt`, for slots 0 to 2.
+fn path(slot: usize) -> Option<PathBuf> {
+    Some(dir()?.join(format!("progress-{}.txt", slot + 1)))
+}
+
+/// Finished levels for one player, one flag per level. Missing or unreadable
+/// progress just means nothing is finished yet. Before there were players,
+/// progress was kept in `progress.txt`; that becomes the first player's.
+pub fn load(slot: usize, levels: usize) -> Vec<bool> {
+    let read = |p: Option<PathBuf>| p.and_then(|p| std::fs::read_to_string(p).ok());
+    let text = read(path(slot))
+        .or_else(|| {
+            (slot == 0)
+                .then(|| read(dir().map(|d| d.join("progress.txt"))))
+                .flatten()
+        })
         .unwrap_or_default();
     parse(&text, levels)
 }
 
-/// Save the finished levels. Failing to save shouldn't stop the game, so
-/// errors are ignored.
-pub fn save(solved: &[bool]) {
-    if let Some(p) = path() {
+/// Save one player's finished levels. Failing to save shouldn't stop the
+/// game, so errors are ignored.
+pub fn save(slot: usize, solved: &[bool]) {
+    if let Some(p) = path(slot) {
         if let Some(dir) = p.parent() {
             let _ = std::fs::create_dir_all(dir);
         }

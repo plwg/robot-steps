@@ -380,7 +380,29 @@ enum Face {
     Sad,
 }
 
-fn draw_robot(c: Vec2, cell: f32, face: Face, look: Vec2, time: f32, lift: f32) {
+/// Each player's robot has its own colours.
+#[derive(Clone, Copy)]
+struct Paint {
+    body: Color,
+    trim: Color,
+}
+
+const PAINTS: [Paint; progress::SLOTS] = [
+    Paint {
+        body: Color::new(0.55, 0.78, 0.98, 1.0),
+        trim: Color::new(0.3, 0.5, 0.8, 1.0),
+    },
+    Paint {
+        body: Color::new(1.0, 0.76, 0.45, 1.0),
+        trim: Color::new(0.85, 0.48, 0.18, 1.0),
+    },
+    Paint {
+        body: Color::new(0.62, 0.88, 0.55, 1.0),
+        trim: Color::new(0.28, 0.62, 0.3, 1.0),
+    },
+];
+
+fn draw_robot(c: Vec2, cell: f32, face: Face, look: Vec2, time: f32, lift: f32, paint: Paint) {
     let s = cell * 0.8;
     // Shadow stays on the ground while the robot hops.
     draw_ellipse(
@@ -392,8 +414,7 @@ fn draw_robot(c: Vec2, cell: f32, face: Face, look: Vec2, time: f32, lift: f32) 
         SHADOW,
     );
 
-    let body = Color::new(0.55, 0.78, 0.98, 1.0);
-    let trim = Color::new(0.3, 0.5, 0.8, 1.0);
+    let Paint { body, trim } = paint;
     for side in [-1.0, 1.0] {
         draw_circle(c.x + side * s * 0.22, c.y + s * 0.34, s * 0.1, DARKGRAY);
     }
@@ -542,12 +563,14 @@ enum Button {
     Undo,
     Clear,
     Fullscreen,
+    /// Back to the level map.
+    Map,
 }
 
 /// Each fixed button with its centre and half-size. The tool buttons (axe,
 /// check, repeat, loop, calls) and play are laid out per level, as only some
 /// levels have the tools.
-const BUTTONS: [(Button, Vec2, f32); 7] = [
+const BUTTONS: [(Button, Vec2, f32); 8] = [
     (Button::Arrow(Dir::Up), vec2(1256.0, 130.0), 42.0),
     (Button::Arrow(Dir::Left), vec2(1166.0, 215.0), 42.0),
     (Button::Arrow(Dir::Right), vec2(1346.0, 215.0), 42.0),
@@ -555,6 +578,7 @@ const BUTTONS: [(Button, Vec2, f32); 7] = [
     (Button::Undo, vec2(1186.0, 728.0), 40.0),
     (Button::Clear, vec2(1326.0, 728.0), 40.0),
     (Button::Fullscreen, vec2(1386.0, 36.0), 22.0),
+    (Button::Map, vec2(48.0, 36.0), 26.0),
 ];
 
 // ---------------------------------------------------------------------------
@@ -615,14 +639,78 @@ struct Game {
     pressed: Option<(Button, f32)>,
     time: f32,
     fullscreen: bool,
+    /// Which screen is showing, and whose game it is.
+    screen: Screen,
+    slot: usize,
+    /// Each player's finished levels (for the player cards).
+    finished: [usize; progress::SLOTS],
+    /// The bin on a player card was tapped once; a second tap (soon after)
+    /// erases that player.
+    erase_armed: Option<(usize, f32)>,
+    /// Where the mouse is, and recent clicks (for the ripple).
+    mouse: Vec2,
+    clicks: Vec<(Vec2, f32)>,
+}
+
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum Screen {
+    /// Pick one of the three players.
+    Players,
+    /// The level map for the current player.
+    Map,
+    /// Playing a level.
+    Play,
+}
+
+/// The idea each level is about, for colouring the map.
+#[derive(Clone, Copy, PartialEq)]
+enum Kind {
+    Move,
+    Axe,
+    Repeat,
+    Check,
+    Loop,
+    If,
+    Function,
+}
+
+impl Kind {
+    fn of(level: &Level) -> Kind {
+        if level.functions > 0 {
+            Kind::Function
+        } else if level.if_tree || level.if_star {
+            Kind::If
+        } else if level.loops {
+            Kind::Loop
+        } else if level.check {
+            Kind::Check
+        } else if level.repeat {
+            Kind::Repeat
+        } else if level.chop {
+            Kind::Axe
+        } else {
+            Kind::Move
+        }
+    }
+
+    fn colour(self) -> Color {
+        match self {
+            Kind::Move => dir_color(Dir::Up),
+            Kind::Axe => AXE_BROWN,
+            Kind::Repeat => Color::new(0.2, 0.72, 0.72, 1.0),
+            Kind::Check => CHECK_SLATE,
+            Kind::Loop => Color::new(0.05, 0.5, 0.52, 1.0),
+            Kind::If => IF_LIME,
+            Kind::Function => FN_COLOURS[0],
+        }
+    }
 }
 
 impl Game {
     fn new(fullscreen: bool) -> Game {
         let levels = level::all_levels();
-        let solved = progress::load(levels.len());
-        // Carry on from the first level not finished yet.
-        let idx = solved.iter().position(|&done| !done).unwrap_or(0);
+        let solved = progress::load(0, levels.len());
+        let idx = 0;
         let world = levels[idx].world();
         let mut game = Game {
             levels,
@@ -643,11 +731,57 @@ impl Game {
             pressed: None,
             time: 0.0,
             fullscreen,
+            screen: Screen::Players,
+            slot: 0,
+            finished: [0; progress::SLOTS],
+            erase_armed: None,
+            mouse: vec2(W / 2.0, H / 2.0),
+            clicks: Vec::new(),
         };
-        // Set the level up properly (its function strips, and so on), the
-        // same way as choosing it from the level dots.
         game.load(idx);
+        game.count_finished();
         game
+    }
+
+    fn paint(&self) -> Paint {
+        PAINTS[self.slot]
+    }
+
+    /// Re-read how far each player has got, for the player cards.
+    fn count_finished(&mut self) {
+        let n = self.levels.len();
+        for slot in 0..progress::SLOTS {
+            self.finished[slot] = progress::load(slot, n).iter().filter(|&&d| d).count();
+        }
+    }
+
+    fn choose_player(&mut self, slot: usize) {
+        self.slot = slot;
+        self.solved = progress::load(slot, self.levels.len());
+        self.open_map();
+    }
+
+    fn open_map(&mut self) {
+        self.particles.clear();
+        self.reset_robot();
+        self.screen = Screen::Map;
+    }
+
+    fn open_players(&mut self) {
+        self.count_finished();
+        self.erase_armed = None;
+        self.screen = Screen::Players;
+    }
+
+    fn open_level(&mut self, idx: usize) {
+        // Set the level up properly (its function strips, and so on).
+        self.load(idx);
+        self.screen = Screen::Play;
+    }
+
+    /// The first level this player hasn't finished, if any.
+    fn next_unfinished(&self) -> Option<usize> {
+        self.solved.iter().position(|&done| !done)
     }
 
     fn level(&self) -> &Level {
@@ -664,8 +798,13 @@ impl Game {
         self.reset_robot();
     }
 
+    /// After a win: on to the next level, or back to the map after the last.
     fn next_level(&mut self) {
-        self.load((self.idx + 1) % self.levels.len());
+        if self.idx + 1 < self.levels.len() {
+            self.load(self.idx + 1);
+        } else {
+            self.open_map();
+        }
     }
 
     fn reset_robot(&mut self) {
@@ -774,7 +913,7 @@ impl Game {
             Button::Clear => editing && !self.prog().is_empty(),
             Button::Undo => editing && (self.armed.is_some() || !self.prog().is_empty()),
             Button::Play => self.running() || (editing && self.has_actions()),
-            Button::Fullscreen => true,
+            Button::Fullscreen | Button::Map => true,
         }
     }
 
@@ -848,6 +987,7 @@ impl Game {
                 self.fullscreen = !self.fullscreen;
                 set_fullscreen(self.fullscreen);
             }
+            Button::Map => self.open_map(),
         }
     }
 
@@ -930,7 +1070,7 @@ impl Game {
         self.event = None;
         if self.world.stars.is_empty() {
             self.solved[self.idx] = true;
-            progress::save(&self.solved);
+            progress::save(self.slot, &self.solved);
             self.set_mode(Mode::Win);
             self.confetti();
             return;
@@ -941,6 +1081,8 @@ impl Game {
 
     fn update(&mut self, dt: f32) {
         self.time += dt;
+        let now = self.time;
+        self.clicks.retain(|&(_, t)| now - t < 0.5);
         self.timer += dt;
         match self.mode {
             Mode::Reveal if self.timer >= REVEAL_TIME => self.act(),
@@ -964,6 +1106,23 @@ impl Game {
     }
 
     fn handle_click(&mut self, m: Vec2) {
+        self.clicks.push((m, self.time));
+        let (_, fs_centre, fs_half) = BUTTONS
+            .into_iter()
+            .find(|b| b.0 == Button::Fullscreen)
+            .expect("there's a full screen button");
+        if (m - fs_centre).abs().max_element() <= fs_half {
+            self.press(Button::Fullscreen);
+            return;
+        }
+        match self.screen {
+            Screen::Players => self.click_players(m),
+            Screen::Map => self.click_map(m),
+            Screen::Play => self.click_play(m),
+        }
+    }
+
+    fn click_play(&mut self, m: Vec2) {
         for (button, centre, half) in self.buttons() {
             if self.visible(button) && (m - centre).abs().max_element() <= half {
                 if self.mode == Mode::Win && button != Button::Fullscreen {
@@ -979,14 +1138,42 @@ impl Game {
             }
             return;
         }
-        if self.mode == Mode::Edit && self.click_strip(m) {
+        if self.mode == Mode::Edit {
+            self.click_strip(m);
+        }
+    }
+
+    fn click_players(&mut self, m: Vec2) {
+        let armed = self.erase_armed.take();
+        for slot in 0..progress::SLOTS {
+            if self.finished[slot] > 0 && (m - erase_button(slot)).length() < 30.0 {
+                match armed {
+                    // Second tap on the same bin: erase that player.
+                    Some((s, t)) if s == slot && self.time - t < 4.0 => {
+                        progress::save(slot, &vec![false; self.levels.len()]);
+                        self.count_finished();
+                    }
+                    _ => self.erase_armed = Some((slot, self.time)),
+                }
+                return;
+            }
+        }
+        // Any other tap just cancels a half-done erase.
+        if armed.is_some() {
             return;
         }
-        // Tap a level dot to jump there.
-        if let Some(i) = (0..self.levels.len())
-            .find(|&i| (m - self.level_dot(i)).length() < self.dot_spacing() / 2.0)
-        {
-            self.load(i);
+        if let Some(slot) = (0..progress::SLOTS).find(|&s| player_card(s).contains(m)) {
+            self.choose_player(slot);
+        }
+    }
+
+    fn click_map(&mut self, m: Vec2) {
+        if (m - BACK_BUTTON).abs().max_element() <= 30.0 {
+            self.open_players();
+            return;
+        }
+        if let Some(i) = (0..self.levels.len()).find(|&i| (m - self.map_node(i)).length() < 40.0) {
+            self.open_level(i);
         }
     }
 
@@ -995,6 +1182,30 @@ impl Game {
             self.press(Button::Fullscreen);
         }
         let typed = get_char_pressed();
+        match self.screen {
+            Screen::Players => {
+                // 1, 2 or 3 picks a player.
+                if let Some(n) = typed.and_then(|c| c.to_digit(10))
+                    && (1..=progress::SLOTS as u32).contains(&n)
+                {
+                    self.choose_player(n as usize - 1);
+                }
+                return;
+            }
+            Screen::Map => {
+                if is_key_pressed(KeyCode::Enter) || is_key_pressed(KeyCode::Space) {
+                    self.open_level(self.next_unfinished().unwrap_or(0));
+                } else if is_key_pressed(KeyCode::Backspace) {
+                    self.open_players();
+                }
+                return;
+            }
+            Screen::Play => {}
+        }
+        if is_key_pressed(KeyCode::M) {
+            self.open_map();
+            return;
+        }
         if self.mode == Mode::Win {
             if [KeyCode::Space, KeyCode::Enter, KeyCode::Right]
                 .into_iter()
@@ -1102,12 +1313,18 @@ impl Game {
         buttons
     }
 
-    fn level_dot(&self, i: usize) -> Vec2 {
-        vec2(40.0 + i as f32 * self.dot_spacing(), 36.0)
-    }
-
-    fn dot_spacing(&self) -> f32 {
-        (1270.0 / (self.levels.len() - 1) as f32).min(52.0)
+    /// Where level `i` sits on the map: a path that winds back and forth.
+    fn map_node(&self, i: usize) -> Vec2 {
+        let cols = MAP_COLS;
+        let rows = self.levels.len().div_ceil(cols);
+        let (row, mut col) = (i / cols, i % cols);
+        if row % 2 == 1 {
+            col = cols - 1 - col;
+        }
+        let x_step = 154.0;
+        let y_step = (600.0 / rows as f32).min(115.0);
+        let x0 = W / 2.0 - x_step * (cols - 1) as f32 / 2.0;
+        vec2(x0 + col as f32 * x_step, 150.0 + row as f32 * y_step)
     }
 
     /// Where the map goes. Levels with functions have more program strips,
@@ -1308,7 +1525,16 @@ impl Game {
 
     fn draw(&self) {
         clear_background(SKY);
-        self.draw_level_dots();
+        match self.screen {
+            Screen::Players => self.draw_players(),
+            Screen::Map => self.draw_map(),
+            Screen::Play => self.draw_play(),
+        }
+        draw_fullscreen_icon(vec2(1386.0, 36.0), 22.0, INK);
+        self.draw_cursor();
+    }
+
+    fn draw_play(&self) {
         self.draw_board();
         self.draw_program();
         self.draw_buttons();
@@ -1331,23 +1557,181 @@ impl Game {
         if self.mode == Mode::Win && self.timer > 0.8 {
             self.draw_next_prompt();
         }
+        // The level's number, next to the map button.
+        let c = vec2(104.0, 36.0);
+        draw_circle(c.x, c.y, 22.0, WHITE);
+        draw_circle(c.x, c.y, 19.0, Kind::of(self.level()).colour());
+        draw_label(&format!("{}", self.idx + 1), c, 26.0, WHITE);
     }
 
-    fn draw_level_dots(&self) {
-        // Shrink the dots a little when there are lots of levels.
-        let k = (self.dot_spacing() / 40.0).min(1.0);
-        for i in 0..self.levels.len() {
-            let c = self.level_dot(i);
-            if i == self.idx {
-                draw_circle(c.x, c.y, 22.0, WHITE);
-                draw_circle(c.x, c.y, 19.0, dir_color(Dir::Up));
-                draw_label(&format!("{}", i + 1), c, 26.0, WHITE);
-            } else if self.solved[i] {
-                draw_star(c, 17.0 * k, 0.0, STAR);
-            } else {
-                draw_circle(c.x, c.y, 11.0 * k, Color::new(1.0, 1.0, 1.0, 0.7));
+    /// Three cards, one per player, each with its own robot and progress.
+    fn draw_players(&self) {
+        let total = self.levels.len();
+        for (slot, &paint) in PAINTS.iter().enumerate() {
+            let mut r = player_card(slot);
+            let hover = r.contains(self.mouse);
+            if hover {
+                r.y -= 8.0;
+            }
+            rounded_rect(r.x, r.y + 10.0, r.w, r.h, 30.0, SHADOW);
+            rounded_rect(r.x, r.y, r.w, r.h, 30.0, PANEL);
+            let robot = vec2(r.center().x, r.y + 150.0);
+            let face = if hover { Face::Happy } else { Face::Calm };
+            let bob = (self.time * 3.0 + slot as f32).sin().abs() * 8.0 * f32::from(hover);
+            draw_robot(
+                robot - vec2(0.0, bob),
+                230.0,
+                face,
+                Vec2::ZERO,
+                self.time,
+                bob,
+                paint,
+            );
+
+            // A star and how many levels are done, with a bar for how far.
+            let done = self.finished[slot];
+            let row = vec2(r.center().x, r.y + 300.0);
+            draw_star(row - vec2(40.0, 0.0), 26.0, 0.0, STAR);
+            draw_label(&format!("{done}"), row + vec2(24.0, 0.0), 52.0, INK);
+            let bar = Rect::new(r.x + 40.0, r.y + 350.0, r.w - 80.0, 22.0);
+            rounded_rect(bar.x, bar.y, bar.w, bar.h, 11.0, SLOT_EMPTY);
+            let fill = bar.w * done as f32 / total as f32;
+            if fill > 0.0 {
+                rounded_rect(bar.x, bar.y, fill.max(bar.h), bar.h, 11.0, paint.trim);
+            }
+
+            // The bin: tap twice to start this player again.
+            if done > 0 {
+                let c = erase_button(slot);
+                let armed = self.erase_armed.is_some_and(|(s, _)| s == slot);
+                let pulse = (self.time * 8.0).sin() * 0.5 + 0.5;
+                let (colour, size) = if armed {
+                    (STOP_RED, 28.0 + pulse * 4.0)
+                } else {
+                    (DISABLED, 24.0)
+                };
+                rounded_rect(c.x - size, c.y - size, size * 2.0, size * 2.0, 12.0, colour);
+                draw_trash_icon(c, size);
             }
         }
+    }
+
+    /// The level map: a winding path, finished levels starred, and this
+    /// player's robot waiting on the next one.
+    fn draw_map(&self) {
+        let n = self.levels.len();
+        let next = self.next_unfinished();
+        // The path joining the levels.
+        for i in 1..n {
+            let (a, b) = (self.map_node(i - 1), self.map_node(i));
+            draw_line(a.x, a.y, b.x, b.y, 16.0, Color::new(1.0, 1.0, 1.0, 0.55));
+        }
+        for i in 0..n {
+            let c = self.map_node(i);
+            let kind = Kind::of(&self.levels[i]);
+            let colour = kind.colour();
+            let mut r = 34.0;
+            if (self.mouse - c).length() < 40.0 {
+                r += 5.0;
+            }
+            if next == Some(i) {
+                r += (self.time * 4.0).sin().abs() * 4.0;
+            }
+            draw_circle(c.x, c.y + 4.0, r, darker(colour, 0.7));
+            if self.solved[i] {
+                draw_circle(c.x, c.y, r, colour);
+                draw_label(&format!("{}", i + 1), c, 30.0, WHITE);
+                draw_star(c + vec2(24.0, -24.0), 17.0, 0.0, darker(STAR, 0.8));
+                draw_star(c + vec2(24.0, -26.0), 15.0, 0.0, STAR);
+            } else {
+                draw_circle(c.x, c.y, r, colour);
+                draw_circle(c.x, c.y, r - 6.0, WHITE);
+                draw_label(&format!("{}", i + 1), c, 30.0, colour);
+            }
+        }
+        // This player's robot sits on the next level to play.
+        if let Some(i) = next {
+            let c = self.map_node(i) - vec2(0.0, 58.0);
+            let hop = (self.time * 3.0).sin().abs() * 6.0;
+            draw_robot(
+                c - vec2(0.0, hop),
+                70.0,
+                Face::Happy,
+                Vec2::ZERO,
+                self.time,
+                hop,
+                self.paint(),
+            );
+        }
+        // Back to the players: a left arrow, and whose map this is.
+        let b = BACK_BUTTON;
+        rounded_rect(
+            b.x - 30.0,
+            b.y - 26.0,
+            60.0,
+            60.0,
+            14.0,
+            darker(dir_color(Dir::Left), 0.7),
+        );
+        rounded_rect(
+            b.x - 30.0,
+            b.y - 30.0,
+            60.0,
+            60.0,
+            14.0,
+            dir_color(Dir::Left),
+        );
+        draw_arrow(b, 48.0, Dir::Left, WHITE);
+        draw_robot(
+            b + vec2(70.0, 2.0),
+            64.0,
+            Face::Calm,
+            Vec2::ZERO,
+            self.time,
+            0.0,
+            self.paint(),
+        );
+    }
+
+    /// A big, bright pointer that's easy to spot, with a ripple on each click.
+    fn draw_cursor(&self) {
+        for &(at, t) in &self.clicks {
+            let age = self.time - t;
+            if age < 0.4 {
+                let k = age / 0.4;
+                draw_circle_lines(at.x, at.y, 12.0 + k * 30.0, 5.0 * (1.0 - k), STAR);
+            }
+        }
+        let p = self.mouse;
+        // A bright yellow ring around the tip, gently pulsing.
+        let pulse = (self.time * 3.0).sin().abs();
+        draw_circle(p.x, p.y, 22.0, Color::new(1.0, 0.9, 0.2, 0.35));
+        draw_circle_lines(
+            p.x,
+            p.y,
+            22.0 + pulse * 3.0,
+            4.0,
+            Color::new(1.0, 0.85, 0.1, 0.95),
+        );
+        let s = 1.8;
+        let pt = |x: f32, y: f32| p + vec2(x, y) * s;
+        let head = [pt(0.0, 0.0), pt(0.0, 30.0), pt(21.0, 21.0)];
+        let tail = [
+            pt(8.0, 21.0),
+            pt(14.0, 19.0),
+            pt(20.0, 33.0),
+            pt(14.0, 36.0),
+        ];
+        let ink = Color::new(0.1, 0.12, 0.2, 1.0);
+        for shape in [&head[..], &tail[..]] {
+            for k in 0..shape.len() {
+                let (a, b) = (shape[k], shape[(k + 1) % shape.len()]);
+                draw_line(a.x, a.y, b.x, b.y, 7.0, ink);
+                draw_circle(a.x, a.y, 3.5, ink);
+            }
+        }
+        draw_triangle(head[0], head[1], head[2], WHITE);
+        draw_quad(tail[0], tail[1], tail[2], tail[3], WHITE);
     }
 
     fn draw_board(&self) {
@@ -1500,7 +1884,7 @@ impl Game {
             _ => (pos, 0.0, Face::Calm),
         };
         let c = self.cell_centre_f(at) - vec2(0.0, lift);
-        draw_robot(c, cell, face, look, self.time, lift);
+        draw_robot(c, cell, face, look, self.time, lift, self.paint());
         if self.mode == Mode::Checking {
             draw_thought(c, cell);
         }
@@ -1742,6 +2126,7 @@ impl Game {
                 Button::Undo => (UNDO_YELLOW, 18.0),
                 Button::Clear => (STOP_RED, 18.0),
                 Button::Fullscreen => (PANEL, 10.0),
+                Button::Map => (dir_color(Dir::Up), 14.0),
             };
             let colour = if enabled { colour } else { DISABLED };
             let size = half * 2.0;
@@ -1764,7 +2149,7 @@ impl Game {
                     STAR,
                 );
             }
-            if button != Button::Fullscreen {
+            if button != Button::Fullscreen && button != Button::Map {
                 rounded_rect(
                     c.x - half,
                     c.y - half + 6.0,
@@ -1830,6 +2215,7 @@ impl Game {
                 Button::Undo => draw_undo_icon(c, half),
                 Button::Clear => draw_trash_icon(c, half),
                 Button::Fullscreen => draw_fullscreen_icon(c, half, INK),
+                Button::Map => draw_map_icon(c, half),
             }
         }
     }
@@ -1842,6 +2228,39 @@ impl Game {
         draw_circle(c.x, c.y, r, PLAY_GREEN);
         draw_arrow(c, r * 1.4, Dir::Right, WHITE);
     }
+}
+
+/// Levels per row on the level map.
+const MAP_COLS: usize = 8;
+/// The map's back-to-players button.
+const BACK_BUTTON: Vec2 = vec2(52.0, 44.0);
+
+/// Player `slot`'s card on the players screen.
+fn player_card(slot: usize) -> Rect {
+    let w = 340.0;
+    let x = W / 2.0 + (slot as f32 - 1.0) * 400.0 - w / 2.0;
+    Rect::new(x, 170.0, w, 460.0)
+}
+
+/// The erase button in the corner of a player card.
+fn erase_button(slot: usize) -> Vec2 {
+    let r = player_card(slot);
+    vec2(r.right() - 44.0, r.bottom() - 44.0)
+}
+
+/// A little map: three linked dots.
+fn draw_map_icon(c: Vec2, r: f32) {
+    let pts = [
+        c + vec2(-0.5, 0.35) * r,
+        c + vec2(0.0, -0.3) * r,
+        c + vec2(0.5, 0.3) * r,
+    ];
+    draw_line(pts[0].x, pts[0].y, pts[1].x, pts[1].y, r * 0.16, WHITE);
+    draw_line(pts[1].x, pts[1].y, pts[2].x, pts[2].y, r * 0.16, WHITE);
+    for p in pts {
+        draw_circle(p.x, p.y, r * 0.2, WHITE);
+    }
+    draw_star(pts[2] + vec2(0.0, -r * 0.05), r * 0.22, 0.0, STAR);
 }
 
 /// Where each part of a program strip goes on screen.
@@ -2012,11 +2431,14 @@ fn window_conf() -> Conf {
 async fn main() {
     rand::srand(miniquad::date::now() as u64);
     let mut game = Game::new(start_fullscreen());
+    // The game draws its own big pointer instead.
+    show_mouse(false);
     loop {
         let camera = fit_camera();
         set_camera(&camera);
+        game.mouse = camera.screen_to_world(mouse_position().into());
         if is_mouse_button_pressed(MouseButton::Left) {
-            game.handle_click(camera.screen_to_world(mouse_position().into()));
+            game.handle_click(game.mouse);
         }
         game.handle_keys();
         game.update(get_frame_time().min(0.05));
