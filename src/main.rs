@@ -1,6 +1,9 @@
 //! Robot Steps: a first coding game. Tap arrows to build a program, press play,
 //! and watch the robot follow it to collect the stars. No reading required.
 
+// On Windows, don't open a console window alongside the game.
+#![windows_subsystem = "windows"]
+
 mod level;
 
 use std::f32::consts::PI;
@@ -112,7 +115,7 @@ fn draw_quad(a: Vec2, b: Vec2, c: Vec2, d: Vec2, color: Color) {
 /// Text centred on a point. Rendered at the real screen resolution so it
 /// stays sharp however much the canvas is scaled up.
 fn draw_label(text: &str, centre: Vec2, size: f32, color: Color) {
-    let scale = (screen_width() / W).min(screen_height() / H);
+    let scale = (screen_width() / W).min(screen_height() / H) * screen_dpi_scale();
     let font_size = (size * scale).round() as u16;
     let dims = measure_text(text, None, font_size, 1.0 / scale);
     draw_text_ex(
@@ -1574,6 +1577,8 @@ fn window_conf() -> Conf {
         window_resizable: true,
         fullscreen: start_fullscreen(),
         sample_count: 4,
+        // Draw at the screen's real resolution when Windows display scaling is on.
+        high_dpi: true,
         platform: miniquad::conf::Platform {
             // Wait for the screen's refresh (vsync) for steady animation.
             swap_interval: Some(1),
