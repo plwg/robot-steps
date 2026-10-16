@@ -51,12 +51,34 @@ pub enum Tile {
     Door,
     /// A door that has been unlocked. The robot can drive through it.
     Open,
+    /// Grass under a rain cloud that counts down 3, 2, 1, rains for a while,
+    /// then starts again. The number is what it shows at the start. The
+    /// robot mustn't get rained on.
+    Rain(u8),
+}
+
+/// A rain cloud stays dry for this many ticks (showing 3, 2, 1), then rains
+/// for `RAIN_WET`, then starts again.
+pub const RAIN_DRY: u8 = 3;
+pub const RAIN_WET: u8 = 2;
+const RAIN_CYCLE: u8 = RAIN_DRY + RAIN_WET;
+
+/// What a rain tile is doing.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Weather {
+    /// Counting down: how many ticks until it rains.
+    Dry(u8),
+    Raining,
 }
 
 impl Tile {
-    /// Can the robot drive onto this tile (without unlocking anything)?
+    /// Can the robot drive onto this tile (without unlocking anything, and
+    /// if it isn't raining there)?
     fn passable(self) -> bool {
-        matches!(self, Tile::Grass | Tile::Stump | Tile::Ice | Tile::Open)
+        matches!(
+            self,
+            Tile::Grass | Tile::Stump | Tile::Ice | Tile::Open | Tile::Rain(_)
+        )
     }
 }
 
@@ -65,12 +87,16 @@ impl Tile {
 pub enum Cmd {
     Move(Dir),
     Chop(Dir),
+    /// Do nothing for a tick, while the rain clouds count down.
+    Wait,
 }
 
 impl Cmd {
-    pub fn dir(self) -> Dir {
+    /// Which way it faces the robot (waiting doesn't turn it).
+    pub fn dir(self) -> Option<Dir> {
         match self {
-            Cmd::Move(d) | Cmd::Chop(d) => d,
+            Cmd::Move(d) | Cmd::Chop(d) => Some(d),
+            Cmd::Wait => None,
         }
     }
 }
@@ -237,18 +263,34 @@ struct Runner<'a> {
     strips: &'a [Vec<Item>],
     world: World,
     out: Vec<Exec>,
-    /// The robot got stuck, or collected every star: nothing more happens.
+    /// The world just before each step.
+    worlds: Vec<World>,
+    /// The robot got stuck (or wet), or collected every star: nothing more
+    /// happens.
     stopped: bool,
+}
+
+/// A program run all the way through ahead of time: each step, and the world
+/// just before it, then the world at the end (so one more world than steps).
+pub struct Simulation {
+    pub trace: Vec<Exec>,
+    pub worlds: Vec<World>,
 }
 
 /// Unroll a program (the main strip, then any functions) into the steps it
 /// takes when run in `world`, in order. It stops after a step that gets the
 /// robot stuck, or that collects the last star, just as the game does.
 pub fn expand(strips: &[Vec<Item>], world: &World) -> Vec<Exec> {
+    simulate(strips, world).trace
+}
+
+/// The same, keeping the world before each step, and at the end.
+pub fn simulate(strips: &[Vec<Item>], world: &World) -> Simulation {
     let mut runner = Runner {
         strips,
         world: world.clone(),
         out: Vec::new(),
+        worlds: Vec::new(),
         stopped: false,
     };
     if !strips.is_empty() {
@@ -259,7 +301,11 @@ pub fn expand(strips: &[Vec<Item>], world: &World) -> Vec<Exec> {
         };
         runner.run(0, 0, strips[0].len(), None, top);
     }
-    runner.out
+    runner.worlds.push(runner.world);
+    Simulation {
+        trace: runner.out,
+        worlds: runner.worlds,
+    }
 }
 
 impl Runner<'_> {
@@ -268,6 +314,7 @@ impl Runner<'_> {
             return;
         }
         let main = at.0 == 0;
+        self.worlds.push(self.world.clone());
         self.out.push(Exec {
             step,
             at,
@@ -278,7 +325,7 @@ impl Runner<'_> {
         });
         if let Step::Do(cmd) = step {
             let stuck = self.world.act(cmd).is_err();
-            self.stopped = stuck || self.world.stars.is_empty();
+            self.stopped = stuck || self.world.wet() || self.world.stars.is_empty();
         }
     }
 
@@ -363,7 +410,8 @@ impl Runner<'_> {
 }
 
 /// A whole program written as text: strips separated by `|`. Within a strip,
-/// `R` moves right, `cR` chops right, and a number repeats a block. `[` opens a loop and `]4` closes it, running it 4 times; `<R`
+/// `R` moves right, `cR` chops right, `W` waits, and a number repeats a
+/// block. `[` opens a loop and `]4` closes it, running it 4 times; `<R`
 /// opens a loop that runs until there's a wall to the right, closed with `]`.
 /// `{tR` starts "if there's a tree to the right", `{sU` "if there's a star
 /// above" (see `Sense::letter` for the rest), `/` is "else" and `}` ends it. `f1` calls the first function, and
@@ -429,6 +477,10 @@ pub fn parse_program(text: &str) -> Vec<Item> {
                 }
                 Item::LoopEnd
             }
+            (Some('W'), None) => Item::Block(Block {
+                cmd: Cmd::Wait,
+                times,
+            }),
             (Some('c'), Some(d)) => Item::Block(Block {
                 cmd: Cmd::Chop(dir(d)),
                 times,
@@ -465,7 +517,8 @@ pub struct LevelDef {
     /// still work. New levels get a name instead.
     id: &'static str,
     /// Legend: `.` grass, `#` tree, `@` rock, `?` mystery (tree or grass),
-    /// `~` ice, `k` key, `D` locked door, `R` robot start, `*` star.
+    /// `~` ice, `k` key, `D` locked door, `1` to `3` a rain cloud (counting
+    /// down from that), `R` robot start, `*` star.
     map: &'static [&'static str],
     /// How many blocks fit in the program for this level.
     slots: usize,
@@ -482,6 +535,8 @@ pub struct LevelDef {
     fn_slots: usize,
     /// Functions are called with a number, which counts inside them can use.
     numbers: bool,
+    /// The wait block.
+    wait: bool,
     /// A demo level comes with its program already written, to show how a
     /// new block is used: just press play.
     demo: Option<&'static str>,
@@ -501,6 +556,7 @@ const fn level(id: &'static str, map: &'static [&'static str]) -> LevelDef {
         functions: 0,
         fn_slots: 0,
         numbers: false,
+        wait: false,
         demo: None,
     }
 }
@@ -552,6 +608,13 @@ impl LevelDef {
     const fn with_else(mut self) -> Self {
         self.otherwise = true;
         self
+    }
+
+    /// Unlock the wait block (and repeat, to wait a few ticks), and limit the
+    /// program to `slots`.
+    const fn with_wait(mut self, slots: usize) -> Self {
+        self.wait = true;
+        self.with_repeat(slots)
     }
 
     /// Let functions be called with a number, for counts inside them.
@@ -927,6 +990,26 @@ pub const CHAPTERS: &[Chapter] = &[
                 .with_numbers(),
         ],
     },
+    // Rain clouds count down 3, 2, 1, then rain for a bit, and start again.
+    // Every step takes a tick, so wait for the rain to pass (or hurry
+    // across before it starts). Don't get wet!
+    Chapter {
+        name: "Rain",
+        levels: &[
+            level("rain-demo", &["R.2.*"]).with_wait(3).demo("R W3 R3"),
+            level("rain-1", &["R1.*"]).with_wait(2),
+            // Hurry across the first one; wait for the second.
+            level("rain-2", &["R.12.*"]).with_wait(2),
+            level("rain-3", &["R3.1.*"]).with_wait(2),
+            level("rain-4", &["R12.3*"]).with_wait(2),
+            level("rain-5", &["R2.1.3.*"]).with_wait(3),
+            // Two ways round: which one keeps dry?
+            level("rain-6", &["R@@@", ".2.*", "@1@."]).with_wait(3),
+            // The same wait each time: a loop.
+            level("rain-7", &["R1.1.1.1.*"]).with_wait(2).with_loops(2),
+            level("rain-8", &["R.2.2.2.2*"]).with_wait(3).with_loops(3),
+        ],
+    },
     // Every block so far.
     Chapter {
         name: "Everything together",
@@ -974,6 +1057,7 @@ pub struct Level {
     pub functions: usize,
     pub fn_slots: usize,
     pub numbers: bool,
+    pub wait: bool,
     /// Where the mystery clouds are.
     pub mysteries: Vec<Pos>,
     /// Where the keys lie.
@@ -1002,6 +1086,7 @@ impl Level {
         level.functions = def.functions;
         level.fn_slots = def.fn_slots;
         level.numbers = def.numbers;
+        level.wait = def.wait;
         level.demo = def.demo.map(parse_strips);
         level
     }
@@ -1026,6 +1111,7 @@ impl Level {
                     '?' => Tile::Mystery,
                     '~' => Tile::Ice,
                     'D' => Tile::Door,
+                    '1'..='3' => Tile::Rain(ch as u8 - b'0'),
                     _ => Tile::Grass,
                 });
                 match ch {
@@ -1033,7 +1119,7 @@ impl Level {
                     '*' => stars.push(p),
                     '?' => mysteries.push(p),
                     'k' => keys.push(p),
-                    '.' | '#' | '@' | '~' | 'D' => {}
+                    '.' | '#' | '@' | '~' | 'D' | '1'..='3' => {}
                     other => panic!("unknown level tile {other:?}"),
                 }
             }
@@ -1054,6 +1140,7 @@ impl Level {
             functions: 0,
             fn_slots: 0,
             numbers: false,
+            wait: false,
             mysteries,
             keys,
             id: "",
@@ -1083,6 +1170,7 @@ impl Level {
             stars: self.stars.clone(),
             keys: self.keys.clone(),
             held: 0,
+            clock: 0,
         }
     }
 
@@ -1140,6 +1228,8 @@ pub enum Event {
         unlocked: bool,
     },
     Chopped(Pos),
+    /// Waited a tick.
+    Waited,
     /// An "if" looked at `at`: `yes` if it saw what it was looking for. (The
     /// game uses this for its animation; `World::act` never returns it.)
     Tested {
@@ -1160,6 +1250,9 @@ pub struct World {
     /// Keys still lying on the ground, and how many the robot is carrying.
     pub keys: Vec<Pos>,
     pub held: u8,
+    /// Ticks so far (one per action), round the rain clouds' cycle: all the
+    /// clouds need to know.
+    clock: u8,
 }
 
 impl World {
@@ -1186,23 +1279,56 @@ impl World {
         inside.then(|| self.tiles[(y * self.w + x) as usize])
     }
 
-    /// Can the robot drive onto `p`: an open tile, or a door it has a key for?
+    /// Can the robot drive onto `p`: an open tile (where it isn't raining),
+    /// or a door it has a key for?
     fn can_enter(&self, p: Pos) -> bool {
         match self.tile(p) {
             Some(Tile::Door) => self.held > 0,
-            Some(tile) => tile.passable(),
+            Some(tile) => tile.passable() && self.weather(p) != Some(Weather::Raining),
             None => false,
         }
     }
 
+    /// What the rain cloud at `p` is doing, if there's one there.
+    pub fn weather(&self, p: Pos) -> Option<Weather> {
+        let Some(Tile::Rain(start)) = self.tile(p) else {
+            return None;
+        };
+        let phase = (RAIN_DRY - start + self.clock) % RAIN_CYCLE;
+        Some(if phase < RAIN_DRY {
+            Weather::Dry(RAIN_DRY - phase)
+        } else {
+            Weather::Raining
+        })
+    }
+
+    /// Is the robot getting rained on?
+    pub fn wet(&self) -> bool {
+        self.weather(self.pos) == Some(Weather::Raining)
+    }
+
+    /// Every action takes a tick, and the rain clouds count down. (Without
+    /// any, time doesn't matter, so it doesn't pass: the same place is the
+    /// same place, for spotting a "repeat until" that would never end.)
+    fn tick(&mut self) {
+        if self.tiles.iter().any(|t| matches!(t, Tile::Rain(_))) {
+            self.clock = (self.clock + 1) % RAIN_CYCLE;
+        }
+    }
+
     /// Do one instruction. `Err` means the robot got stuck: it bumped into
-    /// something, or swung the axe at something that isn't a tree.
+    /// something (or into rain), or swung the axe at something that isn't a
+    /// tree. If it ends up under rain that starts, it's `wet`.
     ///
     /// A bump has to stop the program, not just leave the robot where it is:
     /// otherwise walking into a wall on purpose lines the robot up, and some
     /// levels (6-1, 8-1 and 11-2) can be done without the tool they teach.
     pub fn act(&mut self, cmd: Cmd) -> Result<Event, ()> {
-        let (dx, dy) = cmd.dir().delta();
+        let Some(dir) = cmd.dir() else {
+            self.tick();
+            return Ok(Event::Waited);
+        };
+        let (dx, dy) = dir.delta();
         let step = |(x, y): Pos| (x + dx, y + dy);
         let next = step(self.pos);
         match (cmd, self.tile(next)) {
@@ -1221,9 +1347,11 @@ impl World {
                 // something isn't a bump: that's how it stops.
                 while self.tile(self.pos) == Some(Tile::Ice)
                     && self.tile(step(self.pos)).is_some_and(Tile::passable)
+                    && self.weather(step(self.pos)) != Some(Weather::Raining)
                 {
                     self.pos = step(self.pos);
                 }
+                self.tick();
                 let at = self.pos;
                 let star = self.stars.iter().position(|&s| s == at);
                 if let Some(i) = star {
@@ -1243,6 +1371,7 @@ impl World {
             }
             (Cmd::Chop(_), Some(Tile::Tree)) => {
                 self.tiles[(next.1 * self.w + next.0) as usize] = Tile::Stump;
+                self.tick();
                 Ok(Event::Chopped(next))
             }
             _ => Err(()),
@@ -1289,6 +1418,8 @@ mod tests {
         ("39", "[ U2 R2 D2 R2 ]2 U2 R2"),
         ("40", "[ cR R2 ]4"),
         ("73", "[ R U D R2 ]3"),
+        ("rain-7", "[ W3 R2 ]5"),
+        ("rain-8", "R [ W3 R2 ]4"),
     ];
 
     /// Known solutions for the "repeat until" levels. `<R` starts "repeat
@@ -1449,7 +1580,7 @@ mod tests {
             let mut world = level.revealed(outcome);
             for exec in expand(strips, &world.clone()) {
                 if let Step::Do(cmd) = exec.step {
-                    if world.act(cmd).is_err() {
+                    if world.act(cmd).is_err() || world.wet() {
                         return false;
                     }
                     if world.stars.is_empty() {
@@ -1491,6 +1622,9 @@ mod tests {
             for exec in expand(&strips, &world.clone()) {
                 if let Step::Do(cmd) = exec.step {
                     world.act(cmd).ok()?;
+                    if world.wet() {
+                        return None;
+                    }
                     if world.stars.is_empty() {
                         *slot = None;
                         break;
@@ -1546,6 +1680,9 @@ mod tests {
             let mut cmds = vec![Cmd::Move(dir)];
             if level.chop {
                 cmds.push(Cmd::Chop(dir));
+            }
+            if level.wait && dir == Dir::Up {
+                cmds.push(Cmd::Wait);
             }
             for cmd in cmds {
                 for times in 1..=MAX_TIMES {
@@ -2031,6 +2168,7 @@ mod tests {
         chop: bool,
         /// "If there's a tree that way { chop it }" (two tiles).
         if_chop: bool,
+        wait: bool,
     }
 
     impl Allow {
@@ -2039,6 +2177,7 @@ mod tests {
                 repeat: level.repeat,
                 chop: level.chop,
                 if_chop: can_if_chop(level),
+                wait: level.wait,
             }
         }
     }
@@ -2054,6 +2193,9 @@ mod tests {
         }
         if allow.if_chop {
             steps.extend(Dir::ALL.map(Err));
+        }
+        if allow.wait {
+            steps.push(Ok(Cmd::Wait));
         }
         let max_times = if allow.repeat { MAX_TIMES } else { 1 };
 
@@ -2095,7 +2237,7 @@ mod tests {
                                 }
                                 Err(_) => Ok(()),
                             };
-                            if did.is_err() {
+                            if did.is_err() || world.wet() {
                                 break 'reps;
                             }
                         }
@@ -2313,6 +2455,55 @@ mod tests {
                     fewest_blocks(&without, Allow::level(&without)),
                     None,
                     "level {} can be done without a key",
+                    level.id
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn rain_counts_down_then_rains() {
+        let mut world = Level::parse(&level("test", &["R2..*"])).world();
+        assert_eq!(world.weather((1, 0)), Some(Weather::Dry(2)));
+        world.act(Cmd::Wait).unwrap();
+        assert_eq!(world.weather((1, 0)), Some(Weather::Dry(1)));
+        world.act(Cmd::Wait).unwrap();
+        assert_eq!(world.weather((1, 0)), Some(Weather::Raining));
+        assert!(
+            world.act(Cmd::Move(Dir::Right)).is_err(),
+            "can't drive into rain"
+        );
+        world.act(Cmd::Wait).unwrap();
+        world.act(Cmd::Wait).unwrap();
+        assert_eq!(
+            world.weather((1, 0)),
+            Some(Weather::Dry(3)),
+            "and round again"
+        );
+        // Onto it with 3 to go, and still dry after the step...
+        world.act(Cmd::Move(Dir::Right)).unwrap();
+        assert!(!world.wet());
+        // ...but standing there until it rains is getting wet.
+        world.act(Cmd::Wait).unwrap();
+        assert!(!world.wet());
+        world.act(Cmd::Wait).unwrap();
+        assert!(world.wet());
+    }
+
+    #[test]
+    fn rain_levels_need_wait() {
+        for level in numbered().iter().filter(|l| l.wait) {
+            let mut without = level.clone();
+            without.wait = false;
+            if level.loops {
+                if let Some(program) = fits_with_loops(&without, level.slots) {
+                    panic!("level {} fits without waiting: {program:?}", level.id);
+                }
+            } else {
+                let tiles = fewest_blocks(&without, Allow::level(&without)).unwrap_or(usize::MAX);
+                assert!(
+                    tiles > level.slots,
+                    "level {} fits in {tiles} without waiting",
                     level.id
                 );
             }

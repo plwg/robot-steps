@@ -14,8 +14,8 @@ use std::f32::consts::PI;
 
 use custom::CustomMap;
 use level::{
-    Block, Cmd, Dir, Event, Exec, Item, Level, Loc, MAX_TIMES, NUMBER, Pos, Sense, Step, Tile,
-    World, tiles,
+    Block, Cmd, Dir, Event, Exec, Item, Level, Loc, MAX_TIMES, NUMBER, Pos, Sense, Simulation,
+    Step, Tile, Weather, World, tiles,
 };
 use macroquad::prelude::*;
 use macroquad::rand::gen_range;
@@ -31,6 +31,7 @@ const CHOP_TIME: f32 = 0.7;
 const BUMP_TIME: f32 = 0.8;
 const SAD_TIME: f32 = 1.4;
 const CHECK_TIME: f32 = 0.7;
+const WAIT_TIME: f32 = 0.45;
 /// A "repeat until" looks every time round, so it looks quickly.
 const UNTIL_LOOK_TIME: f32 = 0.4;
 const REVEAL_TIME: f32 = 0.8;
@@ -84,6 +85,9 @@ const YES_GREEN: Color = Color::new(0.2, 0.75, 0.3, 1.0);
 const NO_GREY: Color = Color::new(0.55, 0.58, 0.62, 1.0);
 const LOOP_BAND: Color = Color::new(0.72, 0.9, 0.9, 1.0);
 const CLOUD: Color = Color::new(0.97, 0.97, 1.0, 1.0);
+const RAIN_CLOUD: Color = Color::new(0.48, 0.52, 0.62, 1.0);
+const RAIN_BLUE: Color = Color::new(0.25, 0.5, 0.95, 1.0);
+const WAIT_SLATE: Color = Color::new(0.45, 0.5, 0.62, 1.0);
 const WOOD: Color = Color::new(0.55, 0.35, 0.2, 1.0);
 const LEAF: Color = Color::new(0.16, 0.55, 0.22, 1.0);
 const ICE: Color = Color::new(0.8, 0.93, 0.99, 1.0);
@@ -299,7 +303,11 @@ fn draw_mystery(c: Vec2, cell: f32, scale: f32, time: f32) {
 
 /// A puffy cloud `s` across, shaded underneath.
 fn draw_puff(c: Vec2, s: f32) {
-    let shade = darker(CLOUD, 0.88);
+    draw_puff_in(c, s, CLOUD);
+}
+
+fn draw_puff_in(c: Vec2, s: f32, colour: Color) {
+    let shade = darker(colour, 0.88);
     for (dx, dy, r) in [(-0.2, 0.06, 0.17), (0.2, 0.06, 0.17), (0.0, 0.1, 0.2)] {
         draw_circle(c.x + dx * s, c.y + dy * s + s * 0.03, r * s, shade);
     }
@@ -310,8 +318,58 @@ fn draw_puff(c: Vec2, s: f32) {
         (0.1, -0.08, 0.19),
         (0.0, 0.08, 0.2),
     ] {
-        draw_circle(c.x + dx * s, c.y + dy * s, r * s, CLOUD);
+        draw_circle(c.x + dx * s, c.y + dy * s, r * s, colour);
     }
+}
+
+/// A rain cloud over its tile: white and counting down with its number, or
+/// grey and raining.
+fn draw_rain_cloud(c: Vec2, cell: f32, weather: Weather, time: f32) {
+    let top = c - vec2(0.0, cell * 0.24);
+    match weather {
+        // Small and high, clear of the robot's face.
+        Weather::Dry(n) => {
+            let high = c - vec2(0.0, cell * 0.36);
+            draw_puff(high, cell * 0.5);
+            draw_label(&n.to_string(), high, cell * 0.24, RAIN_BLUE);
+        }
+        Weather::Raining => {
+            for i in 0..7 {
+                let x = c.x + (i as f32 / 6.0 - 0.5) * cell * 0.6;
+                let fall = (time * 2.2 + i as f32 * 0.37).fract();
+                let y = top.y + cell * (0.1 + fall * 0.6);
+                draw_line(
+                    x,
+                    y,
+                    x - cell * 0.03,
+                    y + cell * 0.12,
+                    cell * 0.035,
+                    RAIN_BLUE,
+                );
+            }
+            draw_puff_in(top, cell * 0.72, RAIN_CLOUD);
+        }
+    }
+}
+
+/// An hourglass: wait a tick.
+fn draw_wait_icon(c: Vec2, size: f32, colour: Color) {
+    let (w, h) = (size * 0.32, size * 0.36);
+    let t = size * 0.05;
+    draw_rectangle(c.x - w * 0.6, c.y - h - t, w * 1.2, t, colour);
+    draw_rectangle(c.x - w * 0.6, c.y + h, w * 1.2, t, colour);
+    draw_triangle(
+        vec2(c.x - w * 0.5, c.y - h),
+        vec2(c.x + w * 0.5, c.y - h),
+        c,
+        colour,
+    );
+    draw_triangle(
+        vec2(c.x - w * 0.5, c.y + h),
+        vec2(c.x + w * 0.5, c.y + h),
+        c,
+        colour,
+    );
 }
 
 /// A thought bubble with a question mark, for when the robot is checking.
@@ -704,6 +762,8 @@ fn draw_fullscreen_icon(c: Vec2, r: f32, color: Color) {
 enum Button {
     Arrow(Dir),
     Axe,
+    /// Wait a tick.
+    Wait,
     Repeat,
     Loop,
     /// Start an "if" block (then pick what it looks for, and which way), or
@@ -761,6 +821,8 @@ enum Mode {
     Moving,
     /// Chopping down a tree.
     Chopping,
+    /// Waiting a tick.
+    Waiting,
     /// Walked into something, or swung the axe at something that isn't a tree.
     Bump,
     /// Program finished (or got stuck) without getting every star.
@@ -828,6 +890,16 @@ struct Game {
     /// A made-up map being played instead of a level, and the screen to go
     /// back to afterwards.
     custom: Option<(Level, Screen)>,
+    /// The program run ahead of time, for the slider, and the program it's
+    /// for: worked out again whenever the program changes.
+    sim: Option<(Vec<Vec<Item>>, Simulation)>,
+    /// Where the slider is, while building: just before step `scrub` of the
+    /// simulation (0: the start, before anything).
+    scrub: usize,
+    /// How the mystery clouds turn out in the simulation (play picks again).
+    preview: Vec<bool>,
+    /// The slider's knob is being dragged.
+    sliding: bool,
 }
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -859,11 +931,14 @@ enum Kind {
     Until,
     Else,
     Number,
+    Rain,
 }
 
 impl Kind {
     fn of(level: &Level) -> Kind {
-        if level.numbers {
+        if level.wait {
+            Kind::Rain
+        } else if level.numbers {
             Kind::Number
         } else if level.otherwise {
             Kind::Else
@@ -904,6 +979,7 @@ impl Kind {
             Kind::Until => darker(REPEAT_TEAL, 0.8),
             Kind::Else => darker(IF_LIME, 0.8),
             Kind::Number => FN_COLOURS[1],
+            Kind::Rain => RAIN_CLOUD,
         }
     }
 }
@@ -947,6 +1023,10 @@ impl Game {
             maps: progress::load_maps(),
             maker: Maker::new(),
             custom: None,
+            sim: None,
+            scrub: 0,
+            preview: Vec::new(),
+            sliding: false,
         };
         game.load(idx);
         game.count_finished();
@@ -1041,6 +1121,9 @@ impl Game {
         self.particles.clear();
         self.armed = None;
         self.failed_step = None;
+        self.sim = None;
+        self.scrub = 0;
+        self.preview = self.level().random_outcome(|| gen_range(0, 2) == 1);
         self.reset_robot();
     }
 
@@ -1061,6 +1144,224 @@ impl Game {
         self.event = None;
         self.pc = 0;
         self.set_mode(Mode::Edit);
+        self.show_scrub();
+    }
+
+    // --- the slider: the program run ahead of time ----------------------
+
+    /// Work the simulation out again if the program has changed. A slider at
+    /// the end stays at the end, so it follows the program as it grows.
+    fn refresh_sim(&mut self) {
+        if self
+            .sim
+            .as_ref()
+            .is_some_and(|(strips, _)| *strips == self.strips)
+        {
+            return;
+        }
+        let at_end = self
+            .sim
+            .as_ref()
+            .is_some_and(|(_, sim)| self.scrub > 0 && self.scrub >= sim.trace.len());
+        let world = self.level().revealed(&self.preview);
+        let sim = level::simulate(&self.strips, &world);
+        self.scrub = if at_end {
+            sim.trace.len()
+        } else {
+            self.scrub.min(sim.trace.len())
+        };
+        self.sim = Some((self.strips.clone(), sim));
+        self.show_scrub();
+    }
+
+    /// While building, show the world where the slider is.
+    fn show_scrub(&mut self) {
+        if self.mode != Mode::Edit {
+            return;
+        }
+        match &self.sim {
+            Some((_, sim)) if self.scrub > 0 => {
+                self.world = sim.worlds[self.scrub].clone();
+                // Facing whichever way it last moved or looked.
+                self.facing = sim.trace[..self.scrub]
+                    .iter()
+                    .rev()
+                    .find_map(|e| match e.step {
+                        Step::Do(cmd) => cmd.dir(),
+                        Step::Test { dir, .. } => Some(dir),
+                        Step::Forever => None,
+                    })
+                    .unwrap_or(Dir::Right);
+            }
+            _ => {
+                self.world = self.level().world();
+                self.facing = Dir::Right;
+            }
+        }
+    }
+
+    /// The steps the slider is over, and where its knob is (in steps, part
+    /// way through one while it runs).
+    fn slider(&self) -> Option<(&[Exec], f32)> {
+        if self.mode == Mode::Edit {
+            let (_, sim) = self.sim.as_ref()?;
+            return Some((&sim.trace, self.scrub as f32));
+        }
+        let len = match self.mode {
+            Mode::Moving => self.move_time(),
+            Mode::Checking => self.check_time(),
+            Mode::Chopping => CHOP_TIME,
+            Mode::Waiting => WAIT_TIME,
+            _ => 1.0,
+        };
+        let part = match self.mode {
+            Mode::Moving | Mode::Checking | Mode::Chopping | Mode::Waiting => {
+                (self.timer / len).min(1.0)
+            }
+            // Over: past the last step (the one that won, or went wrong).
+            Mode::Bump | Mode::Sad | Mode::Win => 1.0,
+            _ => 0.0,
+        };
+        Some((
+            &self.trace,
+            (self.pc as f32 + part).min(self.trace.len() as f32),
+        ))
+    }
+
+    /// Move the slider to wherever the pointer is along it.
+    fn slide_to(&mut self, x: f32) {
+        let Some((_, sim)) = &self.sim else { return };
+        let n = sim.trace.len();
+        let k = ((x - SLIDER.x) / SLIDER.w * n as f32)
+            .round()
+            .clamp(0.0, n as f32) as usize;
+        if k != self.scrub {
+            self.scrub = k;
+            self.failed_step = None;
+            self.show_scrub();
+        }
+    }
+
+    /// Step the slider one way or the other.
+    fn nudge_slider(&mut self, by: isize) {
+        let Some((_, sim)) = &self.sim else { return };
+        let k = self.scrub.saturating_add_signed(by).min(sim.trace.len());
+        if k != self.scrub {
+            self.scrub = k;
+            self.failed_step = None;
+            self.show_scrub();
+        }
+    }
+
+    /// A tap on the slider grabs it (stopping a run, if one is going).
+    fn click_slider(&mut self, m: Vec2) -> bool {
+        let r = SLIDER;
+        let hit = m.x > r.x - 24.0 && m.x < r.right() + 24.0 && (m.y - r.y).abs() < 26.0;
+        if !hit || self.slider().is_none_or(|(steps, _)| steps.is_empty()) {
+            return false;
+        }
+        if self.mode != Mode::Edit {
+            self.particles.clear();
+            self.reset_robot();
+        }
+        self.refresh_sim();
+        self.sliding = true;
+        self.slide_to(m.x);
+        true
+    }
+
+    /// Dragging the knob: called every frame.
+    pub fn drag_slider(&mut self) {
+        if !self.sliding {
+            return;
+        }
+        if is_mouse_button_down(MouseButton::Left) {
+            self.slide_to(self.mouse.x);
+        } else {
+            self.sliding = false;
+        }
+    }
+
+    /// How a simulated run turns out, for the end of the slider.
+    fn sim_end(sim: &Simulation) -> SimEnd {
+        let last = sim.worlds.last().expect("there's always a world");
+        if last.stars.is_empty() {
+            return SimEnd::Won;
+        }
+        if last.wet() {
+            return SimEnd::Wet;
+        }
+        match sim.trace.last().map(|e| e.step) {
+            Some(Step::Forever) => SimEnd::Stuck,
+            // The last step didn't happen: it got stuck.
+            Some(Step::Do(cmd)) => {
+                let before = &sim.worlds[sim.worlds.len() - 2];
+                if before.clone().act(cmd).is_err() {
+                    SimEnd::Stuck
+                } else {
+                    SimEnd::Short
+                }
+            }
+            _ => SimEnd::Short,
+        }
+    }
+
+    fn draw_slider(&self) {
+        let Some((steps, at)) = self.slider() else {
+            return;
+        };
+        if steps.is_empty() {
+            return;
+        }
+        let r = SLIDER;
+        let n = steps.len() as f32;
+        let x_at = |k: f32| r.x + r.w * k / n;
+        draw_line(
+            r.x,
+            r.y,
+            r.right(),
+            r.y,
+            10.0,
+            Color::new(1.0, 1.0, 1.0, 0.7),
+        );
+        draw_line(
+            r.x,
+            r.y,
+            x_at(at),
+            r.y,
+            10.0,
+            Color::new(1.0, 1.0, 1.0, 1.0),
+        );
+        // A dot for each step, in its block's colour.
+        for (k, e) in steps.iter().enumerate() {
+            let colour = match e.step {
+                Step::Do(cmd) => Self::block_colour(cmd),
+                Step::Test { .. } => IF_LIME,
+                Step::Forever => STOP_RED,
+            };
+            let c = vec2(x_at(k as f32 + 0.5), r.y);
+            draw_circle(c.x, c.y, 6.0, colour);
+        }
+        // How it ends, at the far end (while building).
+        if self.mode == Mode::Edit
+            && let Some((_, sim)) = &self.sim
+        {
+            let c = vec2(r.right() + 22.0, r.y);
+            match Self::sim_end(sim) {
+                SimEnd::Won => draw_star(c, 16.0, 0.0, STAR),
+                SimEnd::Stuck => draw_answer(c, false),
+                SimEnd::Wet => {
+                    draw_rain_cloud(c + vec2(0.0, 10.0), 40.0, Weather::Raining, self.time)
+                }
+                SimEnd::Short => draw_circle(c.x, c.y, 7.0, DISABLED),
+            }
+        }
+        // The knob: the robot's colour.
+        let c = vec2(x_at(at), r.y);
+        let grow = if self.sliding { 3.0 } else { 0.0 };
+        draw_circle(c.x, c.y + 3.0, 15.0 + grow, SHADOW);
+        draw_circle(c.x, c.y, 15.0 + grow, WHITE);
+        draw_circle(c.x, c.y, 10.0 + grow, self.paint().body);
     }
 
     /// How the move being made plays out, if there is one.
@@ -1118,7 +1419,13 @@ impl Game {
     fn running(&self) -> bool {
         matches!(
             self.mode,
-            Mode::Reveal | Mode::Moving | Mode::Checking | Mode::Chopping | Mode::Bump | Mode::Sad
+            Mode::Reveal
+                | Mode::Moving
+                | Mode::Waiting
+                | Mode::Checking
+                | Mode::Chopping
+                | Mode::Bump
+                | Mode::Sad
         )
     }
 
@@ -1146,7 +1453,7 @@ impl Game {
 
     /// Does the program do anything at all?
     fn has_actions(&self) -> bool {
-        !level::expand(&self.strips, &self.world).is_empty()
+        !level::expand(&self.strips, &self.level().world()).is_empty()
     }
 
     /// Add an item to the strip being edited. Blocks fill an opened-up slot
@@ -1259,6 +1566,7 @@ impl Game {
             Button::Repeat => self.level().repeat,
             Button::Loop => self.level().loops,
             Button::If => !self.level().ifs.is_empty(),
+            Button::Wait => self.level().wait,
             Button::Sense(sense) => self.picking() && self.level().ifs.contains(&sense),
             Button::Else => self.level().otherwise,
             Button::Until => self.level().until,
@@ -1271,7 +1579,9 @@ impl Game {
     fn enabled(&self, button: Button) -> bool {
         let editing = self.mode == Mode::Edit;
         match button {
-            Button::Arrow(_) | Button::Axe | Button::Sense(_) => editing && self.can_place(),
+            Button::Arrow(_) | Button::Axe | Button::Wait | Button::Sense(_) => {
+                editing && self.can_place()
+            }
             // A loop can hold an "if", but an "if" can't hold a loop.
             Button::Loop => {
                 let open_if = open_if(self.prog()).is_some();
@@ -1331,6 +1641,13 @@ impl Game {
             }
             Button::Axe => {
                 self.armed = (self.armed != Some(button)).then_some(button);
+            }
+            Button::Wait => {
+                self.armed = None;
+                self.insert(Item::Block(Block {
+                    cmd: Cmd::Wait,
+                    times: 1,
+                }));
             }
             Button::Sense(_) => self.armed = Some(button),
             Button::Repeat => self.set_times(self.next_times()),
@@ -1407,6 +1724,10 @@ impl Game {
 
     /// Reveal what's under the mystery clouds (different every time), then go.
     fn start_run(&mut self) {
+        // Always from the start, whatever the slider shows.
+        self.world = self.level().world();
+        self.facing = Dir::Right;
+        self.failed_step = None;
         let mysteries = self.level().mysteries.clone();
         if mysteries.is_empty() {
             self.trace = level::expand(&self.strips, &self.world);
@@ -1454,20 +1775,24 @@ impl Game {
                 return;
             }
         };
-        self.facing = cmd.dir();
+        if let Some(dir) = cmd.dir() {
+            self.facing = dir;
+        }
         match self.world.act(cmd) {
             Ok(event) => {
                 self.event = Some(event);
                 self.sfx(match event {
                     Event::Moved { unlocked: true, .. } => Sfx::Unlock,
                     Event::Moved { .. } if self.move_plan().is_some_and(|p| p.slide) => Sfx::Slide,
-                    Event::Moved { .. } => Sfx::Step(cmd.dir()),
+                    Event::Moved { .. } => Sfx::Step(self.facing),
                     Event::Chopped(_) => Sfx::Chop,
+                    Event::Waited => Sfx::Wait,
                     Event::Tested { .. } => Sfx::Look,
                 });
                 self.set_mode(match event {
                     Event::Moved { .. } => Mode::Moving,
                     Event::Chopped(_) => Mode::Chopping,
+                    Event::Waited => Mode::Waiting,
                     Event::Tested { .. } => Mode::Checking,
                 });
             }
@@ -1501,6 +1826,13 @@ impl Game {
             self.burst(c - vec2(0.0, cell * 0.2), cell, LEAF, false);
         }
         self.event = None;
+        // Caught in the rain: that's the end of the run.
+        if self.world.wet() {
+            self.failed_step = self.trace.get(self.pc).map(|e| e.at);
+            self.sfx(Sfx::Rain);
+            self.set_mode(Mode::Sad);
+            return;
+        }
         if self.world.stars.is_empty() {
             // Made-up maps don't count towards a player's levels.
             if self.custom.is_none() {
@@ -1518,6 +1850,9 @@ impl Game {
 
     fn update(&mut self, dt: f32) {
         self.time += dt;
+        if self.screen == Screen::Play && self.mode == Mode::Edit {
+            self.refresh_sim();
+        }
         let now = self.time;
         self.clicks.retain(|&(_, t)| now - t < 0.5);
         let before = self.timer;
@@ -1536,6 +1871,7 @@ impl Game {
             Mode::Moving if self.timer >= self.move_time() => self.finish_action(),
             Mode::Checking if self.timer >= self.check_time() => self.finish_action(),
             Mode::Chopping if self.timer >= CHOP_TIME => self.finish_action(),
+            Mode::Waiting if self.timer >= WAIT_TIME => self.finish_action(),
             Mode::Bump if self.timer >= BUMP_TIME => self.set_mode(Mode::Sad),
             Mode::Sad if self.timer >= SAD_TIME => self.reset_robot(),
             Mode::Win if self.timer > 1.5 && (self.timer % 1.2) < dt => self.confetti(),
@@ -1573,6 +1909,9 @@ impl Game {
     }
 
     fn click_play(&mut self, m: Vec2) {
+        if self.click_slider(m) {
+            return;
+        }
         for (button, centre, half) in self.buttons() {
             if self.visible(button) && (m - centre).abs().max_element() <= half {
                 if self.mode == Mode::Win && !matches!(button, Button::Fullscreen | Button::Sound) {
@@ -1685,6 +2024,7 @@ impl Game {
             (KeyCode::R, Button::Repeat),
             (KeyCode::L, Button::Loop),
             (KeyCode::I, Button::If),
+            (KeyCode::Z, Button::Wait),
             (KeyCode::E, Button::Else),
             (KeyCode::W, Button::Until),
             (KeyCode::N, Button::Number),
@@ -1707,6 +2047,14 @@ impl Game {
             && self.enabled(Button::Repeat)
         {
             self.set_times(n as u8);
+        }
+        // , and . step the slider back and forward.
+        if self.mode == Mode::Edit {
+            if is_key_pressed(KeyCode::Comma) {
+                self.nudge_slider(-1);
+            } else if is_key_pressed(KeyCode::Period) {
+                self.nudge_slider(1);
+            }
         }
         // Tab moves between the main program and the functions.
         if is_key_pressed(KeyCode::Tab) && self.mode == Mode::Edit {
@@ -1736,6 +2084,7 @@ impl Game {
         }
         let tools: Vec<Button> = [
             Button::Axe,
+            Button::Wait,
             Button::Repeat,
             Button::Loop,
             Button::Until,
@@ -2074,6 +2423,7 @@ impl Game {
         self.draw_board();
         self.draw_program();
         self.draw_buttons();
+        self.draw_slider();
         for p in &self.particles {
             if p.star {
                 draw_star(p.pos, p.size, p.spin, p.color);
@@ -2430,7 +2780,7 @@ impl Game {
                     Some(Tile::Mystery) => draw_mystery(c, cell, 1.0, self.time),
                     Some(Tile::Door) => draw_door(c, cell, 0.0),
                     Some(Tile::Open) => draw_door(c, cell, self.door_open((x, y))),
-                    Some(Tile::Grass | Tile::Ice) | None => {}
+                    Some(Tile::Grass | Tile::Ice | Tile::Rain(_)) | None => {}
                 }
             }
         }
@@ -2498,6 +2848,21 @@ impl Game {
             );
         }
         self.draw_robot();
+        // Rain clouds float over everything, the robot too, so rain falls on
+        // it. Where it's raining, the grass turns wet and blue.
+        for y in 0..l.h {
+            for x in 0..l.w {
+                if let Some(weather) = self.world.weather((x, y)) {
+                    let c = self.cell_centre((x, y)).0;
+                    if weather == Weather::Raining {
+                        let k = cell / 2.0;
+                        let wet = Color::new(0.3, 0.5, 0.95, 0.25);
+                        draw_rectangle(c.x - k, c.y - k, cell, cell, wet);
+                    }
+                    draw_rain_cloud(c, cell, weather, self.time);
+                }
+            }
+        }
     }
 
     /// How far open a door is: it swings open once the robot is up against
@@ -2649,6 +3014,7 @@ impl Game {
         match cmd {
             Cmd::Move(dir) => dir_color(dir),
             Cmd::Chop(_) => AXE_BROWN,
+            Cmd::Wait => WAIT_SLATE,
         }
     }
 
@@ -2679,6 +3045,7 @@ impl Game {
             Item::Block(b) => match b.cmd {
                 Cmd::Move(dir) => draw_arrow(r.center(), r.w * 0.8, dir, WHITE),
                 Cmd::Chop(dir) => draw_chop_icon(r.center(), r.w, dir),
+                Cmd::Wait => draw_wait_icon(r.center(), r.w, WHITE),
             },
             Item::LoopStart { .. } | Item::LoopEnd | Item::Else | Item::IfEnd | Item::Gap => {}
             Item::IfStart { sense, dir } => draw_if_icon(r.center(), r.w, sense, dir),
@@ -2759,9 +3126,13 @@ impl Game {
 
         let running = matches!(
             self.mode,
-            Mode::Moving | Mode::Checking | Mode::Chopping | Mode::Bump
+            Mode::Moving | Mode::Waiting | Mode::Checking | Mode::Chopping | Mode::Bump
         );
-        let current = self.trace.get(self.pc).filter(|_| running);
+        // While building, the step the slider is just before.
+        let current = match (&self.sim, self.mode) {
+            (Some((_, sim)), Mode::Edit) if self.scrub > 0 => sim.trace.get(self.scrub),
+            _ => self.trace.get(self.pc).filter(|_| running),
+        };
         // Where this strip has got to: the running slot here, or for the main
         // program, the call that's running a function.
         let at = current.and_then(|e| match (strip, e.call) {
@@ -2892,6 +3263,7 @@ impl Game {
             let (colour, round) = match button {
                 Button::Arrow(dir) => (dir_color(dir), 18.0),
                 Button::Axe => (AXE_BROWN, 18.0),
+                Button::Wait => (WAIT_SLATE, 18.0),
                 Button::Repeat | Button::Loop => (REPEAT_TEAL, 18.0),
                 Button::If | Button::Sense(_) | Button::Else => (IF_LIME, 18.0),
                 Button::Until => (REPEAT_TEAL, 18.0),
@@ -2944,6 +3316,7 @@ impl Game {
                     _ => draw_arrow(c, size * 0.8, dir, WHITE),
                 },
                 Button::Axe => draw_axe_badge(c, size * 0.75),
+                Button::Wait => draw_wait_icon(c, size, WHITE),
                 Button::Repeat => {
                     draw_loop_icon(c, half, WHITE);
                     // Show what the next tap will make the last block (or loop).
@@ -3033,6 +3406,24 @@ struct MovePlan {
     drive: f32,
     unlock: f32,
     step: f32,
+}
+
+/// The slider along the top of the play screen: its left end and length, at
+/// height `y`.
+const SLIDER: Rect = Rect {
+    x: 470.0,
+    y: 36.0,
+    w: 580.0,
+    h: 0.0,
+};
+
+/// How a simulated run ends.
+enum SimEnd {
+    Won,
+    Stuck,
+    Wet,
+    /// Stopped with stars still left.
+    Short,
 }
 
 /// The sound on/off button, next to the full screen one on every screen.
@@ -3360,6 +3751,7 @@ async fn main() {
         }
         game.handle_keys();
         game.drag_paint();
+        game.drag_slider();
         game.update(get_frame_time().min(0.05));
         game.draw();
         next_frame().await;

@@ -12,7 +12,7 @@ stars. There's no reading required.
 |---|---|
 | ![Three players, each with their own robot and progress](docs/players.png) | ![Level 48: the main program calls the ● and ▲ functions, and the robot is partway through ▲, chopping a tree](docs/level.png) |
 
-Across 82 levels in 14 chapters, numbered within each chapter (`3-2`), it
+Across 91 levels in 15 chapters, numbered within each chapter (`3-2`), it
 introduces, in the order programming is usually taught:
 
 1. **Moving:** up, down, left and right, in order
@@ -46,7 +46,18 @@ introduces, in the order programming is usually taught:
 13. **Functions with a number:** call ● with a number (set with repeat), and
     inside it a count can be "●'s number" instead of a fixed one, so one
     function makes stairs of 1, 2 and 3
-14. **Everything together**
+14. **Rain:** rain clouds count down 3, 2, 1, rain for a bit, then start
+    again. Every action takes a tick, so wait for the rain to pass (the wait
+    block, repeated like any other) or hurry across before it starts. Being
+    under a cloud when it rains is getting wet, and the end of the run
+15. **Everything together**
+
+Throughout, a **slider** along the top runs the program ahead of time, while
+it's being built: drag it to see where the robot would be just before any
+step, with the block about to run lifted up, the rain clouds counting, and
+one way the mystery clouds could turn out (play picks again). The end of the
+slider shows how it would finish: a star, a red cross or rain. Play always
+runs from the start.
 
 Throughout, **debugging**: when the robot bumps into something, the step
 that went wrong shakes red, and the program stays put to be fixed. Tapping a
@@ -144,6 +155,8 @@ version to GitHub Pages (`.github/workflows/pages.yml`).
 | R / 2-9 | Repeat the last block (or loop) |
 | L | Open or close a loop |
 | I, then a choice and an arrow | Start an "if" (again to close) |
+| Z | Wait a tick |
+| , / . | Move the slider back / forward a step |
 | E | Else, inside an "if" |
 | W, then an arrow | Start "repeat until there's a wall that way" (again to close) |
 | N | In a function, make the last count the function's number |
@@ -159,8 +172,8 @@ version to GitHub Pages (`.github/workflows/pages.yml`).
 ## Levels
 
 Levels live in `src/level.rs`, in chapters, as small text maps: `R` robot,
-`*` star, `#` tree, `@` rock, `?` mystery, `~` ice, `k` key, `D` locked door
-and `.` grass. A demo level adds its program as text with `.demo(...)`.
+`*` star, `#` tree, `@` rock, `?` mystery, `~` ice, `k` key, `D` locked door,
+`1` to `3` a rain cloud (counting down from that) and `.` grass. A demo level adds its program as text with `.demo(...)`.
 Each level has a name for the save files that never changes, however the
 levels are moved around: the levels used to be numbered straight through,
 1 to 79, and those numbers are their names (`d13` for the demo before 13),
