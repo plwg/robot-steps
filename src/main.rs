@@ -991,9 +991,8 @@ impl Game {
             return None;
         };
         let to = self.world.pos;
-        // With a door to open, the robot first gets right up to it.
-        let (dx, dy) = self.facing.delta();
-        let via = if unlocked { (to.0 - dx, to.1 - dy) } else { to };
+        // Opening a door, the robot waits where it is first.
+        let via = if unlocked { from } else { to };
         let n = (via.0 - from.0).abs() + (via.1 - from.1).abs();
         let slide = n > 1 || (n == 1 && self.world.tile(via) == Some(Tile::Ice));
         let drive = match n {
@@ -1295,12 +1294,9 @@ impl Game {
             Ok(event) => {
                 self.event = Some(event);
                 self.sfx(match event {
-                    // Unlocking straight away, or once the robot gets to the door.
-                    Event::Moved { .. } => match self.move_plan() {
-                        Some(p) if p.drive == 0.0 => Sfx::Unlock,
-                        Some(p) if p.slide => Sfx::Slide,
-                        _ => Sfx::Step(cmd.dir()),
-                    },
+                    Event::Moved { unlocked: true, .. } => Sfx::Unlock,
+                    Event::Moved { .. } if self.move_plan().is_some_and(|p| p.slide) => Sfx::Slide,
+                    Event::Moved { .. } => Sfx::Step(cmd.dir()),
                     Event::Chopped(_) => Sfx::Chop,
                     Event::Checked { .. } | Event::Tested { .. } => Sfx::Look,
                 });
@@ -1373,15 +1369,6 @@ impl Game {
             && self.timer >= half
         {
             self.sfx(if yes { Sfx::Yes } else { Sfx::No });
-        }
-        if self.mode == Mode::Moving
-            && let Some(p) = self.move_plan()
-            && p.unlock > 0.0
-            && p.drive > 0.0
-            && before < p.drive
-            && self.timer >= p.drive
-        {
-            self.sfx(Sfx::Unlock);
         }
         match self.mode {
             Mode::Reveal if self.timer >= REVEAL_TIME => self.act(),
@@ -2396,10 +2383,6 @@ impl Game {
             if key {
                 held = held.saturating_sub(1);
             }
-            // The key for the door is still carried until the robot gets there.
-            if p.unlock > 0.0 && self.timer < p.drive {
-                held += 1;
-            }
             let fly = (self.timer - p.drive) / (p.unlock * 0.5);
             if p.unlock > 0.0 && (0.0..1.0).contains(&fly) {
                 let door = self.cell_centre(self.world.pos).0 + vec2(0.0, cell * 0.06);
@@ -2790,9 +2773,9 @@ impl Game {
 }
 
 /// A move, in up to three parts: driving (or sliding) from `from` to `via`,
-/// then opening the door there if there is one, then stepping through it to
-/// `to`.
-/// Each part's time is 0 if it doesn't happen.
+/// then opening a door if there is one, then stepping through it to `to`.
+/// Each part's time is 0 if it doesn't happen (a move that opens a door is
+/// always a single step, so it doesn't drive first).
 struct MovePlan {
     from: Pos,
     via: Pos,

@@ -634,7 +634,8 @@ pub const LEVELS: &[LevelDef] = &[
     // Two doors need two keys.
     level(&["R.D.D*", ".@@@@@", "k@@@@@", "k@@@@@"]).with_repeat(3),
     level(&["R~~~k", "@@@@D", "*~~~."]),
-    // A locked door stops the robot sliding, until it has the key.
+    // A locked door stops the robot sliding, even with the key: it has to
+    // step onto the door to open it.
     level(&["*D~~~R", "@@@@@~", "k~~~~~"]),
     level(&["@k@@k@@k@@", "R.D..D..D*"]).with_loops(4),
 ];
@@ -843,21 +844,21 @@ impl World {
         match (cmd, self.tile(next)) {
             (Cmd::Move(_), _) if self.can_enter(next) => {
                 let from = self.pos;
-                let mut next = next;
                 let mut unlocked = false;
-                // On ice the robot keeps sliding until something stops it.
-                // Sliding into something isn't a bump: that's how it stops.
-                loop {
-                    if self.tile(next) == Some(Tile::Door) {
-                        self.held -= 1;
-                        self.tiles[(next.1 * self.w + next.0) as usize] = Tile::Open;
-                        unlocked = true;
-                    }
-                    self.pos = next;
-                    next = step(self.pos);
-                    if self.tile(self.pos) != Some(Tile::Ice) || !self.can_enter(next) {
-                        break;
-                    }
+                // A key is only used by stepping onto a locked door.
+                if self.tile(next) == Some(Tile::Door) {
+                    self.held -= 1;
+                    self.tiles[(next.1 * self.w + next.0) as usize] = Tile::Open;
+                    unlocked = true;
+                }
+                self.pos = next;
+                // On ice the robot keeps sliding until something stops it. A
+                // locked door stops it too, key or no key. Sliding into
+                // something isn't a bump: that's how it stops.
+                while self.tile(self.pos) == Some(Tile::Ice)
+                    && self.tile(step(self.pos)).is_some_and(Tile::passable)
+                {
+                    self.pos = step(self.pos);
                 }
                 let at = self.pos;
                 let star = self.stars.iter().position(|&s| s == at);
@@ -1608,6 +1609,26 @@ mod tests {
         world.act(Cmd::Move(Dir::Up)).unwrap();
         assert!(world.act(Cmd::Move(Dir::Left)).is_ok());
         assert_eq!(world.tile((2, 0)), Some(Tile::Open));
+    }
+
+    #[test]
+    fn sliding_stops_at_a_door_even_with_a_key() {
+        let mut world = Level::parse(&level(&["kR~~D*"])).world();
+        world.act(Cmd::Move(Dir::Right)).unwrap();
+        assert_eq!(world.pos, (3, 0), "no key yet: stopped at the door");
+        world.act(Cmd::Move(Dir::Left)).unwrap();
+        world.act(Cmd::Move(Dir::Left)).unwrap();
+        world.act(Cmd::Move(Dir::Right)).unwrap();
+        assert_eq!((world.pos, world.held), ((1, 0), 1));
+        world.act(Cmd::Move(Dir::Right)).unwrap();
+        assert_eq!(
+            (world.pos, world.held),
+            ((3, 0), 1),
+            "still stops at the door"
+        );
+        let opened = world.act(Cmd::Move(Dir::Right));
+        assert!(matches!(opened, Ok(Event::Moved { unlocked: true, .. })));
+        assert_eq!((world.pos, world.held), ((4, 0), 0));
     }
 
     #[test]
