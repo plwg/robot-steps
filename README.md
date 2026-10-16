@@ -12,7 +12,7 @@ stars. There's no reading required.
 |---|---|
 | ![Three players, each with their own robot and progress](docs/players.png) | ![Level 48: the main program calls the ● and ▲ functions, and the robot is partway through ▲, chopping a tree](docs/level.png) |
 
-Across 73 levels it introduces:
+Across 79 levels it introduces:
 
 - **Sequences:** up, down, left and right, in order
 - **Debugging:** when the robot bumps into something, the step that went wrong
@@ -35,6 +35,16 @@ Across 73 levels it introduces:
 - **Keys and doors:** a locked door needs a key, and each key opens one door.
   The robot remembers what it's carrying, so the order matters: fetch the key
   first, even when it's the other way
+- **Repeat until:** "keep going until there's a wall that way". The robot
+  looks before each time round. Mystery clouds decide how far it is, so no
+  fixed number of times would do. One that would go round for ever (back
+  where it started, and still no wall) stops and shakes red
+- **Else:** "if there's a tree to the right { go down } otherwise { go
+  right }". The grey ✗ between the blocks marks where the "otherwise" part
+  starts
+- **Functions with a number:** call ● with a number (set with repeat), and
+  inside it a count can be "●'s number" instead of a fixed one, so one
+  function makes stairs of 1, 2 and 3
 
 Each new block is first shown in a demo level (▶ on the map): the program is
 already written, so just press play and watch how it's used. Then each new
@@ -126,6 +136,9 @@ version to GitHub Pages (`.github/workflows/pages.yml`).
 | R / 2-9 | Repeat the last block (or loop) |
 | L | Open or close a loop |
 | T / S, then an arrow | Start "if there's a tree / star that way" (again to close) |
+| E | Else, inside an "if" |
+| W, then an arrow | Start "repeat until there's a wall that way" (again to close) |
+| N | In a function, make the last count the function's number |
 | F / G | Call function ● / ▲ |
 | Tab | Switch between the main program and the functions |
 | Space / Enter | Play or stop |
