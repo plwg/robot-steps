@@ -72,6 +72,17 @@ cargo build --release --target x86_64-pc-windows-gnu
 Under WSL the game runs on the GPU, but WSL caps full screen at 4K to about
 40 fps. The native Windows build runs at a steady 60.
 
+WSL also has no sound card, so the Linux build is silent there: ALSA reports
+it can't open a PCM device, and each sound prints "Audio thread died". The
+game still plays fine. For sound under WSL, route ALSA through WSLg's
+PulseAudio server: install `libasound2-plugins` and put this in
+`~/.asoundrc`:
+
+```
+pcm.!default { type pulse }
+ctl.!default { type pulse }
+```
+
 ### Web
 
 ```bash
