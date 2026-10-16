@@ -144,3 +144,10 @@ as text with `.demo(...)`. Demos aren't numbered, so adding one never
 renumbers the levels in anyone's save. `cargo test` proves that every
 level can be solved within its slots, and that each tool is actually needed
 where it's introduced.
+
+Bumping into a rock, a tree, a locked door or the edge of the map stops the
+program; it isn't a harmless "stay put" (unlike sliding on ice into something,
+which is just how the slide stops). The levels depend on this: if bumps did
+nothing, the robot could walk into a wall on purpose to line itself up, and
+some levels could be done without the tool they teach (level 27 without
+checking, 41 without an "if", 45 without a function).

@@ -33,8 +33,11 @@ const CHECK_TIME: f32 = 0.7;
 const REVEAL_TIME: f32 = 0.8;
 /// Sliding on ice takes this long per tile (plus a little to slow down).
 const SLIDE_TIME: f32 = 0.16;
-/// Before stepping through a locked door, the key opens it.
+/// Stepping onto a locked door, the robot drives up against it, the key goes
+/// in and the door swings open, then the robot carries on through.
 const UNLOCK_TIME: f32 = 0.6;
+/// How far onto the door's tile the robot gets before the door opens.
+const DOOR_PUSH: f32 = 0.35;
 
 const BOARD: Rect = Rect {
     x: 20.0,
@@ -2360,7 +2363,8 @@ impl Game {
         self.draw_robot();
     }
 
-    /// How far open a door is: it swings open as the robot unlocks it.
+    /// How far open a door is: it swings open once the robot is up against
+    /// it and the key is in.
     fn door_open(&self, at: Pos) -> f32 {
         match self.move_plan() {
             Some(p) if self.mode == Mode::Moving && p.unlock > 0.0 && at == p.to => {
@@ -2393,10 +2397,18 @@ impl Game {
                         hop(p.from, p.via, k)
                     }
                 } else if t < p.drive + p.unlock {
-                    // Waiting at the door while the key opens it.
-                    (pos_vec(p.via), 0.0, Face::Happy)
+                    // Driving up against the door as the key goes in, then
+                    // waiting there while it swings open.
+                    let k = ((t - p.drive) / (p.unlock * 0.5)).min(1.0);
+                    let eased = k * k * (3.0 - 2.0 * k);
+                    let door = pos_vec(p.via).lerp(pos_vec(p.to), DOOR_PUSH);
+                    (pos_vec(p.via).lerp(door, eased), 0.0, Face::Happy)
                 } else if p.step > 0.0 {
-                    hop(p.via, p.to, ((t - p.drive - p.unlock) / p.step).min(1.0))
+                    // On through the open door.
+                    let k = ((t - p.drive - p.unlock) / p.step).min(1.0);
+                    let eased = k * k * (3.0 - 2.0 * k);
+                    let door = pos_vec(p.via).lerp(pos_vec(p.to), DOOR_PUSH);
+                    (door.lerp(pos_vec(p.to), eased), 0.0, Face::Happy)
                 } else {
                     (pos, 0.0, Face::Happy)
                 }

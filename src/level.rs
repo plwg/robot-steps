@@ -868,6 +868,10 @@ impl World {
 
     /// Do one instruction. `Err` means the robot got stuck: it bumped into
     /// something, or swung the axe at something that isn't a tree.
+    ///
+    /// A bump has to stop the program, not just leave the robot where it is:
+    /// otherwise walking into a wall on purpose lines the robot up, and some
+    /// levels (27, 41 and 45) can be done without the tool they teach.
     pub fn act(&mut self, cmd: Cmd) -> Result<Event, ()> {
         let (dx, dy) = cmd.dir().delta();
         let step = |(x, y): Pos| (x + dx, y + dy);
