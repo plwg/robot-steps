@@ -1,0 +1,5 @@
+# quad-snd (macroquad's audio) declares its browser functions without saying
+# which module they come from, which newer Rust no longer allows by default.
+# They are provided by web/mq_js_bundle.js.
+[target.wasm32-unknown-unknown]
+rustflags = ["-C", "link-arg=--allow-undefined"]

@@ -6,6 +6,7 @@
 
 mod level;
 mod progress;
+mod sound;
 
 use std::f32::consts::PI;
 
@@ -14,6 +15,7 @@ use level::{
 };
 use macroquad::prelude::*;
 use macroquad::rand::gen_range;
+use sound::{Sfx, Sounds};
 
 // Everything is drawn on a fixed 16:9 canvas that is scaled to fit the window.
 const W: f32 = 1422.0;
@@ -25,6 +27,10 @@ const BUMP_TIME: f32 = 0.8;
 const SAD_TIME: f32 = 1.4;
 const CHECK_TIME: f32 = 0.7;
 const REVEAL_TIME: f32 = 0.8;
+/// Sliding on ice takes this long per tile (plus a little to slow down).
+const SLIDE_TIME: f32 = 0.16;
+/// Before stepping through a locked door, the key opens it.
+const UNLOCK_TIME: f32 = 0.6;
 
 const BOARD: Rect = Rect {
     x: 20.0,
@@ -70,6 +76,13 @@ const LOOP_BAND: Color = Color::new(0.72, 0.9, 0.9, 1.0);
 const CLOUD: Color = Color::new(0.97, 0.97, 1.0, 1.0);
 const WOOD: Color = Color::new(0.55, 0.35, 0.2, 1.0);
 const LEAF: Color = Color::new(0.16, 0.55, 0.22, 1.0);
+const ICE: Color = Color::new(0.8, 0.93, 0.99, 1.0);
+const ICE_DARK: Color = Color::new(0.72, 0.88, 0.97, 1.0);
+const ICE_BLUE: Color = Color::new(0.1, 0.75, 0.95, 1.0);
+const GOLD: Color = Color::new(0.98, 0.75, 0.15, 1.0);
+const KEY_GOLD: Color = Color::new(0.88, 0.6, 0.05, 1.0);
+const DOOR_WOOD: Color = Color::new(0.68, 0.42, 0.22, 1.0);
+const STONE: Color = Color::new(0.5, 0.52, 0.58, 1.0);
 
 fn dir_color(dir: Dir) -> Color {
     match dir {
@@ -378,11 +391,115 @@ fn draw_loop_icon(c: Vec2, r: f32, color: Color) {
     );
 }
 
+/// A patch of ice: pale blue, with a couple of shiny streaks.
+fn draw_ice(x: f32, y: f32, cell: f32, dark: bool) {
+    draw_rectangle(x, y, cell, cell, if dark { ICE_DARK } else { ICE });
+    let shine = Color::new(1.0, 1.0, 1.0, 0.8);
+    for (a, b, w) in [(0.2, 0.45, 0.06), (0.5, 0.62, 0.035)] {
+        let p = vec2(x, y) + vec2(a, b) * cell;
+        let q = p + vec2(0.22, -0.22) * cell;
+        draw_line(p.x, p.y, q.x, q.y, w * cell, shine);
+    }
+}
+
+/// A key, lying on its side, `size` long.
+fn draw_key(c: Vec2, size: f32, colour: Color) {
+    let s = size;
+    let ring = c - vec2(s * 0.28, 0.0);
+    draw_rectangle(ring.x, c.y - s * 0.06, s * 0.74, s * 0.12, colour);
+    for x in [0.3, 0.42] {
+        draw_rectangle(c.x + s * x, c.y, s * 0.08, s * 0.2, colour);
+    }
+    draw_circle(ring.x, ring.y, s * 0.22, colour);
+    draw_circle(ring.x, ring.y, s * 0.1, darker(colour, 0.6));
+}
+
+/// A wooden door in a stone frame, with a padlock. `open` (0 to 1) swings it
+/// back against the frame.
+fn draw_door(c: Vec2, cell: f32, open: f32) {
+    let s = cell;
+    let (top, bottom) = (c.y - s * 0.44, c.y + s * 0.44);
+    let (left, right) = (c.x - s * 0.4, c.x + s * 0.4);
+    let post = s * 0.1;
+    draw_rectangle(left, top, post, bottom - top, STONE);
+    draw_rectangle(right - post, top, post, bottom - top, STONE);
+    draw_rectangle(left, top, right - left, post, STONE);
+    // The door hinges on the left and swings back until it's edge-on.
+    let full = right - left - 2.0 * post;
+    let w = full * (1.0 - open * 0.85);
+    let (x, y, h) = (left + post, top + post, bottom - top - post);
+    draw_rectangle(x, y, w, h, DOOR_WOOD);
+    for k in 1..3 {
+        let px = x + w * k as f32 / 3.0;
+        draw_line(px, y, px, y + h, s * 0.02, darker(DOOR_WOOD, 0.75));
+    }
+    if open < 0.5 {
+        let lock = vec2(x + w / 2.0, c.y + s * 0.06);
+        let lw = s * 0.11 * (1.0 - open * 2.0);
+        // The shackle lifts as the lock opens.
+        let lift = open * s * 0.2;
+        draw_arc(
+            lock - vec2(0.0, s * 0.06 + lift),
+            lw * 0.8,
+            PI,
+            2.0 * PI,
+            s * 0.035,
+            STONE,
+        );
+        rounded_rect(
+            lock.x - lw,
+            lock.y - lw * 0.6,
+            lw * 2.0,
+            lw * 1.6,
+            lw * 0.3,
+            GOLD,
+        );
+        draw_circle(lock.x, lock.y + lw * 0.1, lw * 0.25, INK);
+    }
+}
+
+/// A speaker: with sound waves, or crossed out when the sound is off.
+fn draw_speaker_icon(c: Vec2, r: f32, on: bool, color: Color) {
+    let p = |x: f32, y: f32| c + vec2(x, y) * r;
+    draw_rectangle(c.x - r * 0.7, c.y - r * 0.22, r * 0.3, r * 0.44, color);
+    draw_quad(
+        p(-0.42, -0.22),
+        p(0.0, -0.6),
+        p(0.0, 0.6),
+        p(-0.42, 0.22),
+        color,
+    );
+    if on {
+        for k in [0.35, 0.65] {
+            draw_arc(p(0.0, 0.0), r * k, -0.3 * PI, 0.3 * PI, r * 0.1, color);
+        }
+    } else {
+        draw_line(
+            c.x + r * 0.2,
+            c.y - r * 0.3,
+            c.x + r * 0.7,
+            c.y + r * 0.3,
+            r * 0.12,
+            color,
+        );
+        draw_line(
+            c.x + r * 0.2,
+            c.y + r * 0.3,
+            c.x + r * 0.7,
+            c.y - r * 0.3,
+            r * 0.12,
+            color,
+        );
+    }
+}
+
 #[derive(Clone, Copy, PartialEq)]
 enum Face {
     Calm,
     Happy,
     Sad,
+    /// Sliding on ice: wide eyes and an "O" mouth.
+    Wow,
 }
 
 /// Each player's robot has its own colours.
@@ -470,7 +587,8 @@ fn draw_robot(c: Vec2, cell: f32, face: Face, look: Vec2, time: f32, lift: f32, 
                 WHITE,
             );
         } else {
-            draw_circle(eye.x, eye.y, s * 0.075, WHITE);
+            let big = if face == Face::Wow { 1.25 } else { 1.0 };
+            draw_circle(eye.x, eye.y, s * 0.075 * big, WHITE);
             let pupil = eye + look * s * 0.03;
             draw_circle(pupil.x, pupil.y, s * 0.038, INK);
         }
@@ -495,6 +613,7 @@ fn draw_robot(c: Vec2, cell: f32, face: Face, look: Vec2, time: f32, lift: f32, 
             ORANGE,
         ),
         Face::Calm => draw_line(m.x - s * 0.06, m.y, m.x + s * 0.06, m.y, s * 0.03, mouth),
+        Face::Wow => draw_circle_lines(m.x, m.y + s * 0.01, s * 0.045, s * 0.03, mouth),
     }
 }
 
@@ -576,6 +695,8 @@ enum Button {
     Undo,
     Clear,
     Fullscreen,
+    /// Sound on or off.
+    Sound,
     /// Back to the level map.
     Map,
 }
@@ -583,7 +704,7 @@ enum Button {
 /// Each fixed button with its centre and half-size. The tool buttons (axe,
 /// check, repeat, loop, calls) and play are laid out per level, as only some
 /// levels have the tools.
-const BUTTONS: [(Button, Vec2, f32); 8] = [
+const BUTTONS: [(Button, Vec2, f32); 9] = [
     (Button::Arrow(Dir::Up), vec2(1256.0, 130.0), 42.0),
     (Button::Arrow(Dir::Left), vec2(1166.0, 215.0), 42.0),
     (Button::Arrow(Dir::Right), vec2(1346.0, 215.0), 42.0),
@@ -591,6 +712,7 @@ const BUTTONS: [(Button, Vec2, f32); 8] = [
     (Button::Undo, vec2(1186.0, 728.0), 40.0),
     (Button::Clear, vec2(1326.0, 728.0), 40.0),
     (Button::Fullscreen, vec2(1386.0, 36.0), 22.0),
+    (Button::Sound, SOUND_BUTTON, 22.0),
     (Button::Map, vec2(48.0, 36.0), 26.0),
 ];
 
@@ -668,6 +790,8 @@ struct Game {
     /// Where the mouse is, and recent clicks (for the ripple).
     mouse: Vec2,
     clicks: Vec<(Vec2, f32)>,
+    sounds: Sounds,
+    muted: bool,
 }
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -690,11 +814,17 @@ enum Kind {
     Loop,
     If,
     Function,
+    Ice,
+    Key,
 }
 
 impl Kind {
     fn of(level: &Level) -> Kind {
-        if level.functions > 0 {
+        if !level.keys.is_empty() {
+            Kind::Key
+        } else if level.has(Tile::Ice) {
+            Kind::Ice
+        } else if level.functions > 0 {
             Kind::Function
         } else if level.if_tree || level.if_star {
             Kind::If
@@ -720,12 +850,14 @@ impl Kind {
             Kind::Loop => Color::new(0.05, 0.5, 0.52, 1.0),
             Kind::If => IF_LIME,
             Kind::Function => FN_COLOURS[0],
+            Kind::Ice => ICE_BLUE,
+            Kind::Key => KEY_GOLD,
         }
     }
 }
 
 impl Game {
-    fn new(fullscreen: bool) -> Game {
+    fn new(fullscreen: bool, sounds: Sounds) -> Game {
         let levels = level::all_levels();
         let keys: Vec<String> = levels.iter().map(Level::key).collect();
         let solved = progress::load(0, &keys);
@@ -758,10 +890,18 @@ impl Game {
             erase_armed: None,
             mouse: vec2(W / 2.0, H / 2.0),
             clicks: Vec::new(),
+            sounds,
+            muted: false,
         };
         game.load(idx);
         game.count_finished();
         game
+    }
+
+    fn sfx(&self, sfx: Sfx) {
+        if !self.muted {
+            self.sounds.play(sfx);
+        }
     }
 
     fn paint(&self) -> Paint {
@@ -779,6 +919,7 @@ impl Game {
     }
 
     fn choose_player(&mut self, slot: usize) {
+        self.sfx(Sfx::Tap);
         self.slot = slot;
         self.solved = progress::load(slot, &self.keys);
         self.open_map();
@@ -797,6 +938,7 @@ impl Game {
     }
 
     fn open_level(&mut self, idx: usize) {
+        self.sfx(Sfx::Tap);
         // Set the level up properly (its function strips, and so on).
         self.load(idx);
         self.screen = Screen::Play;
@@ -841,6 +983,27 @@ impl Game {
         self.event = None;
         self.pc = 0;
         self.set_mode(Mode::Edit);
+    }
+
+    /// If the robot's last move slid it along the ice, how many tiles.
+    fn slid(&self, from: Pos) -> Option<i32> {
+        let to = self.world.pos;
+        let n = (to.0 - from.0).abs() + (to.1 - from.1).abs();
+        (n > 1 || self.world.tile(to) == Some(Tile::Ice)).then_some(n)
+    }
+
+    /// How long the move being made takes: a hop, or a slide (which takes
+    /// longer the further it goes), after opening a door if there is one.
+    fn move_time(&self) -> f32 {
+        let Some(Event::Moved { from, unlocked, .. }) = self.event else {
+            return STEP_TIME;
+        };
+        let unlock = if unlocked { UNLOCK_TIME } else { 0.0 };
+        unlock
+            + match self.slid(from) {
+                Some(n) => SLIDE_TIME * n as f32 + 0.2,
+                None => STEP_TIME,
+            }
     }
 
     fn set_mode(&mut self, mode: Mode) {
@@ -986,7 +1149,7 @@ impl Game {
             Button::Clear => editing && !self.prog().is_empty(),
             Button::Undo => editing && (self.armed.is_some() || !self.prog().is_empty()),
             Button::Play => self.running() || (editing && self.has_actions()),
-            Button::Fullscreen | Button::Map => true,
+            Button::Fullscreen | Button::Sound | Button::Map => true,
         }
     }
 
@@ -995,8 +1158,12 @@ impl Game {
             return;
         }
         self.pressed = Some((button, self.time));
-        if button != Button::Fullscreen {
+        if !matches!(button, Button::Fullscreen | Button::Sound) {
             self.failed_step = None;
+        }
+        // Starting a run makes its own sounds.
+        if button != Button::Play || self.running() {
+            self.sfx(Sfx::Tap);
         }
         match button {
             Button::Arrow(dir) => {
@@ -1055,6 +1222,10 @@ impl Game {
                 self.fullscreen = !self.fullscreen;
                 set_fullscreen(self.fullscreen);
             }
+            Button::Sound => {
+                self.muted = !self.muted;
+                self.sfx(Sfx::Tap);
+            }
             Button::Map => self.open_map(),
         }
     }
@@ -1077,6 +1248,7 @@ impl Game {
             let (c, cell) = self.cell_centre(p);
             self.burst(c, cell, CLOUD, false);
         }
+        self.sfx(Sfx::Poof);
         self.set_mode(Mode::Reveal);
     }
 
@@ -1084,6 +1256,7 @@ impl Game {
     fn act(&mut self) {
         let Some(exec) = self.trace.get(self.pc).copied() else {
             // Ran out of blocks with stars still left.
+            self.sfx(Sfx::Sad);
             self.set_mode(Mode::Sad);
             return;
         };
@@ -1095,6 +1268,7 @@ impl Game {
                 let (dx, dy) = dir.delta();
                 let at = (self.world.pos.0 + dx, self.world.pos.1 + dy);
                 self.event = Some(Event::Tested { at, yes });
+                self.sfx(Sfx::Look);
                 self.set_mode(Mode::Checking);
                 return;
             }
@@ -1103,6 +1277,13 @@ impl Game {
         match self.world.act(cmd) {
             Ok(event) => {
                 self.event = Some(event);
+                self.sfx(match event {
+                    Event::Moved { unlocked: true, .. } => Sfx::Unlock,
+                    Event::Moved { from, .. } if self.slid(from).is_some() => Sfx::Slide,
+                    Event::Moved { .. } => Sfx::Step(cmd.dir()),
+                    Event::Chopped(_) => Sfx::Chop,
+                    Event::Checked { .. } | Event::Tested { .. } => Sfx::Look,
+                });
                 self.set_mode(match event {
                     Event::Moved { .. } => Mode::Moving,
                     Event::Chopped(_) => Mode::Chopping,
@@ -1111,6 +1292,7 @@ impl Game {
             }
             Err(()) => {
                 self.failed_step = Some(exec.at);
+                self.sfx(Sfx::Bump);
                 self.set_mode(Mode::Bump);
             }
         }
@@ -1121,24 +1303,34 @@ impl Game {
         // Checked and found a tree: now chop it down.
         if let Some(Event::Checked { at, tree: true }) = self.event {
             self.event = Some(Event::Chopped(at));
+            self.sfx(Sfx::Chop);
             self.set_mode(Mode::Chopping);
             return;
         }
-        match self.event {
-            Some(Event::Moved { star: true, .. }) => {
-                let (c, cell) = self.cell_centre(self.world.pos);
+        if let Some(Event::Moved { star, key, .. }) = self.event {
+            let (c, cell) = self.cell_centre(self.world.pos);
+            if star {
                 self.burst(c, cell, STAR, true);
+                self.sfx(Sfx::Star);
             }
-            Some(Event::Chopped(p)) => {
-                let (c, cell) = self.cell_centre(p);
-                self.burst(c - vec2(0.0, cell * 0.2), cell, LEAF, false);
+            if key {
+                self.burst(c, cell, GOLD, true);
+                self.sfx(Sfx::Key);
             }
-            _ => {}
+            // Slid until it bumped (gently) into something.
+            if self.world.tile(self.world.pos) == Some(Tile::Ice) {
+                self.sfx(Sfx::Stop);
+            }
+        }
+        if let Some(Event::Chopped(p)) = self.event {
+            let (c, cell) = self.cell_centre(p);
+            self.burst(c - vec2(0.0, cell * 0.2), cell, LEAF, false);
         }
         self.event = None;
         if self.world.stars.is_empty() {
             self.solved[self.idx] = true;
             progress::save(self.slot, &self.keys, &self.solved);
+            self.sfx(Sfx::Win);
             self.set_mode(Mode::Win);
             self.confetti();
             return;
@@ -1151,10 +1343,20 @@ impl Game {
         self.time += dt;
         let now = self.time;
         self.clicks.retain(|&(_, t)| now - t < 0.5);
+        let before = self.timer;
         self.timer += dt;
+        // An "if" says yes or no halfway through looking.
+        let half = CHECK_TIME * 0.5;
+        if self.mode == Mode::Checking
+            && let Some(Event::Tested { yes, .. }) = self.event
+            && before < half
+            && self.timer >= half
+        {
+            self.sfx(if yes { Sfx::Yes } else { Sfx::No });
+        }
         match self.mode {
             Mode::Reveal if self.timer >= REVEAL_TIME => self.act(),
-            Mode::Moving if self.timer >= STEP_TIME => self.finish_action(),
+            Mode::Moving if self.timer >= self.move_time() => self.finish_action(),
             Mode::Checking if self.timer >= CHECK_TIME => self.finish_action(),
             Mode::Chopping if self.timer >= CHOP_TIME => self.finish_action(),
             Mode::Bump if self.timer >= BUMP_TIME => self.set_mode(Mode::Sad),
@@ -1175,13 +1377,14 @@ impl Game {
 
     fn handle_click(&mut self, m: Vec2) {
         self.clicks.push((m, self.time));
-        let (_, fs_centre, fs_half) = BUTTONS
-            .into_iter()
-            .find(|b| b.0 == Button::Fullscreen)
-            .expect("there's a full screen button");
-        if (m - fs_centre).abs().max_element() <= fs_half {
-            self.press(Button::Fullscreen);
-            return;
+        // These two work on every screen.
+        for (button, centre, half) in BUTTONS {
+            if matches!(button, Button::Fullscreen | Button::Sound)
+                && (m - centre).abs().max_element() <= half
+            {
+                self.press(button);
+                return;
+            }
         }
         match self.screen {
             Screen::Players => self.click_players(m),
@@ -1193,7 +1396,7 @@ impl Game {
     fn click_play(&mut self, m: Vec2) {
         for (button, centre, half) in self.buttons() {
             if self.visible(button) && (m - centre).abs().max_element() <= half {
-                if self.mode == Mode::Win && button != Button::Fullscreen {
+                if self.mode == Mode::Win && !matches!(button, Button::Fullscreen | Button::Sound) {
                     break;
                 }
                 self.press(button);
@@ -1656,6 +1859,7 @@ impl Game {
             Screen::Play => self.draw_play(),
         }
         draw_fullscreen_icon(vec2(1386.0, 36.0), 22.0, INK);
+        draw_speaker_icon(SOUND_BUTTON, 22.0, !self.muted, INK);
         self.draw_cursor();
     }
 
@@ -1948,14 +2152,14 @@ impl Game {
         );
         for y in 0..l.h {
             for x in 0..l.w {
-                let colour = if (x + y) % 2 == 0 { GRASS } else { GRASS_DARK };
-                draw_rectangle(
-                    o.x + x as f32 * cell,
-                    o.y + y as f32 * cell,
-                    cell,
-                    cell,
-                    colour,
-                );
+                let (px, py) = (o.x + x as f32 * cell, o.y + y as f32 * cell);
+                let dark = (x + y) % 2 == 1;
+                if self.world.tile((x, y)) == Some(Tile::Ice) {
+                    draw_ice(px, py, cell, dark);
+                } else {
+                    let colour = if dark { GRASS_DARK } else { GRASS };
+                    draw_rectangle(px, py, cell, cell, colour);
+                }
             }
         }
         // Start pad, so it's clear where the robot goes back to.
@@ -2000,7 +2204,9 @@ impl Game {
                     }
                     Some(Tile::Stump) => draw_stump(c, cell),
                     Some(Tile::Mystery) => draw_mystery(c, cell, 1.0, self.time),
-                    _ => {}
+                    Some(Tile::Door) => draw_door(c, cell, 0.0),
+                    Some(Tile::Open) => draw_door(c, cell, self.door_open((x, y))),
+                    Some(Tile::Grass | Tile::Ice) | None => {}
                 }
             }
         }
@@ -2048,7 +2254,38 @@ impl Game {
             draw_star(c + vec2(0.0, bob), cell * 0.33, wiggle, darker(STAR, 0.8));
             draw_star(c + vec2(0.0, bob - 2.0), cell * 0.3, wiggle, STAR);
         }
+        // Keys glint as they bob; like stars, one being driven onto stays
+        // until the robot gets there.
+        let arriving = match (self.mode, self.event) {
+            (Mode::Moving, Some(Event::Moved { key: true, .. })) => Some(self.world.pos),
+            _ => None,
+        };
+        for (i, &k) in self.world.keys.iter().chain(&arriving).enumerate() {
+            let (c, _) = self.cell_centre(k);
+            let bob = (self.time * 3.0 + i as f32 + 1.5).sin() * cell * 0.04;
+            let c = c + vec2(0.0, bob);
+            draw_key(c + vec2(0.0, 4.0), cell * 0.7, darker(KEY_GOLD, 0.7));
+            draw_key(c, cell * 0.7, GOLD);
+            let glint = (self.time * 2.0 + i as f32).sin().max(0.0);
+            draw_star(
+                c - vec2(cell * 0.2, cell * 0.15),
+                cell * 0.09 * glint,
+                0.0,
+                WHITE,
+            );
+        }
         self.draw_robot();
+    }
+
+    /// How far open a door is: it swings open as the robot unlocks it.
+    fn door_open(&self, at: Pos) -> f32 {
+        match (self.mode, self.event) {
+            (Mode::Moving, Some(Event::Moved { unlocked: true, .. })) if at == self.world.pos => {
+                let half = UNLOCK_TIME * 0.5;
+                ((self.timer - half) / half).clamp(0.0, 1.0)
+            }
+            _ => 1.0,
+        }
     }
 
     fn draw_robot(&self) {
@@ -2056,11 +2293,19 @@ impl Game {
         let pos = pos_vec(self.world.pos);
         let look = dir_vec(self.facing);
         let (at, lift, face) = match (self.mode, self.event) {
-            (Mode::Moving, Some(Event::Moved { from, .. })) => {
-                let t = (self.timer / STEP_TIME).min(1.0);
-                let eased = t * t * (3.0 - 2.0 * t);
-                let hop = (t * PI).sin() * cell * 0.15;
-                (pos_vec(from).lerp(pos, eased), hop, Face::Happy)
+            (Mode::Moving, Some(Event::Moved { from, unlocked, .. })) => {
+                // Opening a door comes first, then the move.
+                let wait = if unlocked { UNLOCK_TIME } else { 0.0 };
+                let t = ((self.timer - wait) / (self.move_time() - wait)).clamp(0.0, 1.0);
+                if self.slid(from).is_some() {
+                    // Sliding: no hop, and slowing down at the end.
+                    let eased = t * (2.0 - t);
+                    (pos_vec(from).lerp(pos, eased), 0.0, Face::Wow)
+                } else {
+                    let eased = t * t * (3.0 - 2.0 * t);
+                    let hop = (t * PI).sin() * cell * 0.15;
+                    (pos_vec(from).lerp(pos, eased), hop, Face::Happy)
+                }
             }
             (Mode::Chopping, _) => (pos, 0.0, Face::Happy),
             (Mode::Checking, _) => (pos, 0.0, Face::Calm),
@@ -2082,7 +2327,46 @@ impl Game {
             _ => (pos, 0.0, Face::Calm),
         };
         let c = self.cell_centre_f(at) - vec2(0.0, lift);
+        // Speed lines behind a sliding robot.
+        if face == Face::Wow && self.mode == Mode::Moving {
+            let back = -look;
+            let side = vec2(-look.y, look.x);
+            for (k, off) in [-0.22, 0.0, 0.22].into_iter().enumerate() {
+                let wave = (self.time * 30.0 + k as f32 * 2.0).sin() * 0.05;
+                let a = c + back * cell * (0.42 + wave) + side * cell * off;
+                let b = a + back * cell * 0.25;
+                draw_line(
+                    a.x,
+                    a.y,
+                    b.x,
+                    b.y,
+                    cell * 0.04,
+                    Color::new(1.0, 1.0, 1.0, 0.85),
+                );
+            }
+        }
         draw_robot(c, cell, face, look, self.time, lift, self.paint());
+
+        // The keys the robot is carrying, held up at its side. A key being
+        // used flies off into the door's lock.
+        let mut held = self.world.held as usize;
+        if let (Mode::Moving, Some(Event::Moved { key, unlocked, .. })) = (self.mode, self.event) {
+            if key {
+                held = held.saturating_sub(1);
+            }
+            let fly = self.timer / (UNLOCK_TIME * 0.5);
+            if unlocked && fly < 1.0 {
+                let door = self.cell_centre(self.world.pos).0 + vec2(0.0, cell * 0.06);
+                let k = fly * fly;
+                draw_key(c.lerp(door, k), cell * 0.4 * (1.0 - k * 0.5), GOLD);
+            }
+        }
+        for i in 0..held {
+            let sway = (self.time * 3.0 + i as f32).sin() * cell * 0.02;
+            let k = c + vec2(cell * 0.46, cell * (-0.12 - i as f32 * 0.16) + sway);
+            draw_key(k + vec2(0.0, 3.0), cell * 0.46, darker(KEY_GOLD, 0.7));
+            draw_key(k, cell * 0.46, GOLD);
+        }
         if self.mode == Mode::Checking {
             draw_thought(c, cell);
         }
@@ -2351,7 +2635,7 @@ impl Game {
                 Button::Play => (PLAY_GREEN, half),
                 Button::Undo => (UNDO_YELLOW, 18.0),
                 Button::Clear => (STOP_RED, 18.0),
-                Button::Fullscreen => (PANEL, 10.0),
+                Button::Fullscreen | Button::Sound => (PANEL, 10.0),
                 Button::Map => (dir_color(Dir::Up), 14.0),
             };
             let colour = if enabled { colour } else { DISABLED };
@@ -2375,7 +2659,7 @@ impl Game {
                     STAR,
                 );
             }
-            if button != Button::Fullscreen && button != Button::Map {
+            if !matches!(button, Button::Fullscreen | Button::Sound | Button::Map) {
                 rounded_rect(
                     c.x - half,
                     c.y - half + 6.0,
@@ -2441,6 +2725,7 @@ impl Game {
                 Button::Undo => draw_undo_icon(c, half),
                 Button::Clear => draw_trash_icon(c, half),
                 Button::Fullscreen => draw_fullscreen_icon(c, half, INK),
+                Button::Sound => draw_speaker_icon(c, half, !self.muted, INK),
                 Button::Map => draw_map_icon(c, half),
             }
         }
@@ -2456,11 +2741,14 @@ impl Game {
     }
 }
 
+/// The sound on/off button, next to the full screen one on every screen.
+const SOUND_BUTTON: Vec2 = vec2(1334.0, 36.0);
+
 /// The size of the eraser that appears on a program block under the pointer.
 const ERASER_R: f32 = 14.0;
 
 /// Levels per row on the level map.
-const MAP_COLS: usize = 10;
+const MAP_COLS: usize = 12;
 /// The map's back-to-players button.
 const BACK_BUTTON: Vec2 = vec2(52.0, 44.0);
 
@@ -2720,7 +3008,7 @@ fn window_conf() -> Conf {
 #[macroquad::main(window_conf)]
 async fn main() {
     rand::srand(miniquad::date::now() as u64);
-    let mut game = Game::new(start_fullscreen());
+    let mut game = Game::new(start_fullscreen(), Sounds::new().await);
     // The game draws its own big pointer instead.
     show_mouse(false);
     loop {

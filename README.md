@@ -12,7 +12,7 @@ stars. There's no reading required.
 |---|---|
 | ![Three players, each with their own robot and progress](docs/players.png) | ![Level 48: the main program calls the ● and ▲ functions, and the robot is partway through ▲, chopping a tree](docs/level.png) |
 
-Across 60 levels it introduces:
+Across 73 levels it introduces:
 
 - **Sequences:** up, down, left and right, in order
 - **Debugging:** when the robot bumps into something, the step that went wrong
@@ -29,11 +29,20 @@ Across 60 levels it introduces:
   loop, one rule handles whatever the robot finds, wherever it finds it
 - **Functions:** extra strips of blocks named with a shape (● and ▲) that the
   main program calls whenever it needs them
+- **Ice:** the robot slides until grass, a rock or the edge stops it, so it
+  has to think ahead about where it will end up (and sometimes go the long
+  way round)
+- **Keys and doors:** a locked door needs a key, and each key opens one door.
+  The robot remembers what it's carrying, so the order matters: fetch the key
+  first, even when it's the other way
 
 Each new block is first shown in a demo level (▶ on the map): the program is
 already written, so just press play and watch how it's used. Then each new
 tool starts on a map from earlier in the game, with too few slots
 to solve it the old way, before moving on to new maps.
+
+Every action has a sound, and each direction plays its own note, so a
+program plays a little tune. The speaker in the corner turns the sound off.
 
 Three players each have their own robot colour and their own progress. A
 level map shows which levels are finished, and the player's robot waits on
@@ -49,7 +58,7 @@ cargo run --release -- --window  # in a window
 ```
 
 On Linux, macroquad needs the usual X11/OpenGL libraries (`libx11`, `libxi`,
-`libgl`).
+`libgl`), and ALSA for sound (`libasound2-dev`).
 
 ### Windows (from Linux or WSL)
 
@@ -73,7 +82,8 @@ python3 -m http.server -d site   # then open http://localhost:8000
 ```
 
 `web/mq_js_bundle.js` is macroquad's loader, copied from the macroquad crate
-(update it with macroquad). In the browser, each player's progress is kept
+(update it with macroquad). Its sound functions are linked by name, which
+`.cargo/config.toml` allows. In the browser, each player's progress is kept
 in local storage instead of a file. Every push to `master` publishes the web
 version to GitHub Pages (`.github/workflows/pages.yml`).
 
@@ -99,7 +109,8 @@ version to GitHub Pages (`.github/workflows/pages.yml`).
 ## Levels
 
 Levels live in `src/level.rs` as small text maps: `R` robot, `*` star,
-`#` tree, `@` rock, `?` mystery and `.` grass. A demo level adds its program
+`#` tree, `@` rock, `?` mystery, `~` ice, `k` key, `D` locked door and
+`.` grass. A demo level adds its program
 as text with `.demo(...)`. Demos aren't numbered, so adding one never
 renumbers the levels in anyone's save. `cargo test` proves that every
 level can be solved within its slots, and that each tool is actually needed

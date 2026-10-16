@@ -40,6 +40,19 @@ pub enum Tile {
     Rock,
     /// Unknown until the program runs: becomes a tree or grass at random.
     Mystery,
+    /// Slippery: the robot slides on until something stops it.
+    Ice,
+    /// Locked: the robot needs a key to get through. The key opens it for good.
+    Door,
+    /// A door that has been unlocked. The robot can drive through it.
+    Open,
+}
+
+impl Tile {
+    /// Can the robot drive onto this tile (without unlocking anything)?
+    fn passable(self) -> bool {
+        matches!(self, Tile::Grass | Tile::Stump | Tile::Ice | Tile::Open)
+    }
 }
 
 /// One instruction.
@@ -318,7 +331,7 @@ pub fn parse_program(text: &str) -> Vec<Item> {
 
 pub struct LevelDef {
     /// Legend: `.` grass, `#` tree, `@` rock, `?` mystery (tree or grass),
-    /// `R` robot start, `*` star.
+    /// `~` ice, `k` key, `D` locked door, `R` robot start, `*` star.
     map: &'static [&'static str],
     /// How many blocks fit in the program for this level.
     slots: usize,
@@ -602,8 +615,31 @@ pub const LEVELS: &[LevelDef] = &[
     .with_axe()
     .with_ifs(5, true, true)
     .with_functions(5, 2, 6),
+    // --- Ice: the robot slides until something stops it (grass, a rock, or
+    // the edge), so think ahead about where it will end up ---
+    level(&["R~~~@", "@@@~@", "@@@*@"]).demo("R D"),
+    level(&["R~~.~~*"]),
+    level(&["R~~~~@", "@@@@~@", "*~~~~."]),
+    // The star is right under the ice, but the robot slides past it.
+    level(&["R~~~~~.", "@@@*@@.", "@@@~@@.", "@@@~..."]),
+    level(&["R~@~~", "~~~~~", "~~~~*", "~~~@~"]),
+    level(&["~~~~~", "@@~*~", "~~~~~", "~R@~~"]),
+    level(&["~~@~~", "*~~@~", "@~~~~", "R~~~@"]),
+    // --- Keys: pick one up to open a locked door. Fetch the key first, even
+    // when it's the other way ---
+    level(&["R.kD*"]).demo("R R R R"),
+    level(&["kR.D*"]),
+    level(&["k@*", ".@D", "R.."]),
+    level(&["R#D*", ".@@@", "k@@@"]).with_axe(),
+    // Two doors need two keys.
+    level(&["R.D.D*", ".@@@@@", "k@@@@@", "k@@@@@"]).with_repeat(3),
+    level(&["R~~~k", "@@@@D", "*~~~."]),
+    // A locked door stops the robot sliding, until it has the key.
+    level(&["*D~~~R", "@@@@@~", "k~~~~~"]),
+    level(&["@k@@k@@k@@", "R.D..D..D*"]).with_loops(4),
 ];
 
+#[derive(Clone)]
 pub struct Level {
     pub w: i32,
     pub h: i32,
@@ -621,6 +657,8 @@ pub struct Level {
     pub fn_slots: usize,
     /// Where the mystery clouds are.
     pub mysteries: Vec<Pos>,
+    /// Where the keys lie.
+    pub keys: Vec<Pos>,
     /// The level's number on the map. Demos aren't numbered: they share the
     /// number of the level they come before.
     pub number: usize,
@@ -637,6 +675,7 @@ impl Level {
         let mut start = None;
         let mut stars = Vec::new();
         let mut mysteries = Vec::new();
+        let mut keys = Vec::new();
         for (y, row) in rows.iter().enumerate() {
             assert_eq!(row.len() as i32, w, "level rows must be the same length");
             for (x, ch) in row.chars().enumerate() {
@@ -645,13 +684,16 @@ impl Level {
                     '#' => Tile::Tree,
                     '@' => Tile::Rock,
                     '?' => Tile::Mystery,
+                    '~' => Tile::Ice,
+                    'D' => Tile::Door,
                     _ => Tile::Grass,
                 });
                 match ch {
                     'R' => start = Some(p),
                     '*' => stars.push(p),
                     '?' => mysteries.push(p),
-                    '.' | '#' | '@' => {}
+                    'k' => keys.push(p),
+                    '.' | '#' | '@' | '~' | 'D' => {}
                     other => panic!("unknown level tile {other:?}"),
                 }
             }
@@ -672,6 +714,7 @@ impl Level {
             functions: def.functions,
             fn_slots: def.fn_slots,
             mysteries,
+            keys,
             number: 0,
             demo: def.demo.map(parse_strips),
         }
@@ -694,7 +737,14 @@ impl Level {
             tiles: self.tiles.clone(),
             pos: self.start,
             stars: self.stars.clone(),
+            keys: self.keys.clone(),
+            held: 0,
         }
+    }
+
+    /// Does the map have any of this tile?
+    pub fn has(&self, tile: Tile) -> bool {
+        self.tiles.contains(&tile)
     }
 
     /// Every way the mysteries can turn out (`true` = tree). With two or more
@@ -722,9 +772,13 @@ impl Level {
 /// What happened when the robot did one instruction.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum Event {
+    /// Drove from `from` to where the robot is now: one tile, or further if
+    /// it slid on ice. Anything picked up or unlocked is where it stopped.
     Moved {
         from: Pos,
         star: bool,
+        key: bool,
+        unlocked: bool,
     },
     Chopped(Pos),
     /// Looked at `at` for a tree (and chopped it if there was one).
@@ -749,6 +803,9 @@ pub struct World {
     pub pos: Pos,
     /// Stars not collected yet.
     pub stars: Vec<Pos>,
+    /// Keys still lying on the ground, and how many the robot is carrying.
+    pub keys: Vec<Pos>,
+    pub held: u8,
 }
 
 impl World {
@@ -768,22 +825,55 @@ impl World {
         inside.then(|| self.tiles[(y * self.w + x) as usize])
     }
 
+    /// Can the robot drive onto `p`: an open tile, or a door it has a key for?
+    fn can_enter(&self, p: Pos) -> bool {
+        match self.tile(p) {
+            Some(Tile::Door) => self.held > 0,
+            Some(tile) => tile.passable(),
+            None => false,
+        }
+    }
+
     /// Do one instruction. `Err` means the robot got stuck: it bumped into
     /// something, or swung the axe at something that isn't a tree.
     pub fn act(&mut self, cmd: Cmd) -> Result<Event, ()> {
         let (dx, dy) = cmd.dir().delta();
-        let next = (self.pos.0 + dx, self.pos.1 + dy);
+        let step = |(x, y): Pos| (x + dx, y + dy);
+        let next = step(self.pos);
         match (cmd, self.tile(next)) {
-            (Cmd::Move(_), Some(Tile::Grass | Tile::Stump)) => {
+            (Cmd::Move(_), _) if self.can_enter(next) => {
                 let from = self.pos;
-                self.pos = next;
-                let star = self.stars.iter().position(|&s| s == next);
+                let mut next = next;
+                let mut unlocked = false;
+                // On ice the robot keeps sliding until something stops it.
+                // Sliding into something isn't a bump: that's how it stops.
+                loop {
+                    if self.tile(next) == Some(Tile::Door) {
+                        self.held -= 1;
+                        self.tiles[(next.1 * self.w + next.0) as usize] = Tile::Open;
+                        unlocked = true;
+                    }
+                    self.pos = next;
+                    next = step(self.pos);
+                    if self.tile(self.pos) != Some(Tile::Ice) || !self.can_enter(next) {
+                        break;
+                    }
+                }
+                let at = self.pos;
+                let star = self.stars.iter().position(|&s| s == at);
                 if let Some(i) = star {
                     self.stars.remove(i);
+                }
+                let key = self.keys.iter().position(|&k| k == at);
+                if let Some(i) = key {
+                    self.keys.remove(i);
+                    self.held += 1;
                 }
                 Ok(Event::Moved {
                     from,
                     star: star.is_some(),
+                    key: key.is_some(),
+                    unlocked,
                 })
             }
             (Cmd::Chop(_), Some(Tile::Tree)) => {
@@ -831,6 +921,7 @@ mod tests {
         (40, "[ cR R2 ]4"),
         (49, "[ ?R R2 ]4"),
         (50, "[ ?R R D ]4"),
+        (73, "[ R U D R2 ]3"),
     ];
 
     /// Known solutions for the function levels: the main strip, then each
@@ -1474,5 +1565,66 @@ mod tests {
             "stumps are passable"
         );
         assert!(world.act(Cmd::Chop(Dir::Down)).is_err(), "can't chop rocks");
+    }
+
+    #[test]
+    fn ice_slides_until_something_stops_it() {
+        let mut world = Level::parse(&level(&["R~~.~~@", "~~~~~~~", "*~~~~~~"])).world();
+        let moved = |from| Event::Moved {
+            from,
+            star: false,
+            key: false,
+            unlocked: false,
+        };
+        // Grass stops the slide, and so does a rock (without a bump).
+        assert_eq!(world.act(Cmd::Move(Dir::Right)), Ok(moved((0, 0))));
+        assert_eq!(world.pos, (3, 0));
+        assert_eq!(world.act(Cmd::Move(Dir::Right)), Ok(moved((3, 0))));
+        assert_eq!(world.pos, (5, 0));
+        // So does the edge of the map.
+        assert!(world.act(Cmd::Move(Dir::Down)).is_ok());
+        assert_eq!(world.pos, (5, 2));
+        assert!(world.act(Cmd::Move(Dir::Down)).is_err(), "off the map");
+        let star = world.act(Cmd::Move(Dir::Left));
+        assert!(matches!(star, Ok(Event::Moved { star: true, .. })));
+        assert_eq!(world.pos, (0, 2));
+    }
+
+    #[test]
+    fn keys_open_doors() {
+        let mut world = Level::parse(&level(&["kRD.", "..D*"])).world();
+        assert!(world.act(Cmd::Move(Dir::Right)).is_err(), "locked");
+        let got = world.act(Cmd::Move(Dir::Left));
+        assert!(matches!(got, Ok(Event::Moved { key: true, .. })));
+        assert_eq!((world.held, world.keys.len()), (1, 0));
+        world.act(Cmd::Move(Dir::Right)).unwrap();
+        let opened = world.act(Cmd::Move(Dir::Right));
+        assert!(matches!(opened, Ok(Event::Moved { unlocked: true, .. })));
+        assert_eq!(world.held, 0, "the key is used up");
+        world.act(Cmd::Move(Dir::Right)).unwrap();
+        // The other door needs another key; the open one stays open.
+        assert!(world.act(Cmd::Move(Dir::Down)).is_ok());
+        assert!(world.act(Cmd::Move(Dir::Left)).is_err());
+        world.act(Cmd::Move(Dir::Up)).unwrap();
+        assert!(world.act(Cmd::Move(Dir::Left)).is_ok());
+        assert_eq!(world.tile((2, 0)), Some(Tile::Open));
+    }
+
+    #[test]
+    fn key_levels_need_the_keys() {
+        for (i, level) in numbered().iter().enumerate() {
+            if !level.keys.is_empty() {
+                let mut without = level.clone();
+                without.keys.clear();
+                without.slots = MAX_PROGRAM;
+                without.repeat = true;
+                assert_eq!(
+                    fewest_blocks(&without, Allow::level(&without)),
+                    None,
+                    "level {} can be done without a key",
+                    i + 1
+                );
+            }
+        }
     }
 }
