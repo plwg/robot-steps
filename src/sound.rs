@@ -148,10 +148,12 @@ pub enum Sfx {
     Sleep,
     /// Rain starting on the robot.
     Rain,
+    /// A bridge falling in the water.
+    Splash,
 }
 
 impl Sfx {
-    const ALL: [Sfx; 20] = [
+    const ALL: [Sfx; 21] = [
         Sfx::Step(Dir::Up),
         Sfx::Step(Dir::Down),
         Sfx::Step(Dir::Left),
@@ -172,6 +174,7 @@ impl Sfx {
         Sfx::Tap,
         Sfx::Sleep,
         Sfx::Rain,
+        Sfx::Splash,
     ];
 
     fn index(self) -> usize {
@@ -230,6 +233,11 @@ impl Sfx {
                 note(0.4, 0.2, 700.0, 900.0, Sine, 0.12),
             ],
             Sfx::Rain => vec![note(0.0, 0.8, 1.0, 1.0, Noise, 0.25)],
+            Sfx::Splash => vec![
+                note(0.0, 0.4, 1.0, 1.0, Noise, 0.3),
+                note(0.0, 0.25, 500.0, 160.0, Sine, 0.45),
+                note(0.2, 0.12, 900.0, 1300.0, Sine, 0.15),
+            ],
             Sfx::Yes => vec![
                 note(0.0, 0.1, E5, E5, Triangle, 0.35),
                 note(0.09, 0.16, A5, A5, Triangle, 0.35),

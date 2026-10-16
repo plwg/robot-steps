@@ -9,11 +9,11 @@ use crate::sound::Sfx;
 use crate::{
     AXE_BROWN, BACK_BUTTON, CALL_INK, DISABLED, Face, GRASS, GRASS_DARK, Game, IF_LIME, INK,
     MAX_CELL, PANEL, PLAY_GREEN, Paint, REPEAT_TEAL, SHADOW, SKY, SLEEP_SLATE, STAR, STOP_RED,
-    Screen, W, darker, dir_color, draw_answer, draw_arrow, draw_axe_badge, draw_bracket, draw_door,
-    draw_ice, draw_key, draw_label, draw_loop_icon, draw_mystery, draw_no_sign, draw_number_icon,
-    draw_play_icon, draw_question, draw_rain_cloud, draw_robot, draw_rock, draw_shape,
-    draw_sleep_icon, draw_star, draw_trash_icon, draw_tree, draw_until_icon, mix, progress,
-    rounded_rect,
+    Screen, W, darker, dir_color, draw_answer, draw_arrow, draw_axe_badge, draw_bracket,
+    draw_bridge, draw_door, draw_ice, draw_key, draw_label, draw_loop_icon, draw_mystery,
+    draw_no_sign, draw_number_icon, draw_play_icon, draw_question, draw_rain_cloud, draw_robot,
+    draw_rock, draw_shape, draw_sleep_icon, draw_star, draw_trash_icon, draw_tree, draw_until_icon,
+    draw_water, mix, progress, rounded_rect, upright_bridge,
 };
 
 /// Where the map maker is up to.
@@ -594,6 +594,11 @@ fn draw_tile(what: char, c: Vec2, cell: f32, time: f32, paint: Paint) {
         '#' => draw_tree(c, cell, 1.0, 0.0),
         '@' => draw_rock(c, cell),
         '~' => draw_ice(c.x - cell / 2.0, c.y - cell / 2.0, cell, false),
+        'w' => draw_water(c.x - cell / 2.0, c.y - cell / 2.0, cell, time),
+        '=' => {
+            draw_water(c.x - cell / 2.0, c.y - cell / 2.0, cell, time);
+            draw_bridge(c, cell, 0.0, false);
+        }
         '?' => draw_mystery(c, cell, 1.0, time),
         'k' => draw_key(c, cell * 0.7, crate::GOLD),
         '1'..='3' => {
@@ -618,6 +623,8 @@ fn draw_custom_map(map: &CustomMap, r: Rect, time: f32, paint: Paint) {
             let dark = (x + y) % 2 == 1;
             if map.get(x, y) == '~' {
                 draw_ice(p.x, p.y, cell, dark);
+            } else if matches!(map.get(x, y), 'w' | '=') {
+                draw_water(p.x, p.y, cell, time);
             } else {
                 let colour = if dark { GRASS_DARK } else { GRASS };
                 draw_rectangle(p.x, p.y, cell, cell, colour);
@@ -628,7 +635,13 @@ fn draw_custom_map(map: &CustomMap, r: Rect, time: f32, paint: Paint) {
         for x in 0..map.w {
             let c = o + vec2(x as f32 + 0.5, y as f32 + 0.5) * cell;
             let what = map.get(x, y);
-            if what != '~' {
+            if what == '=' {
+                let land = |x: i32, y: i32| {
+                    let inside = x >= 0 && y >= 0 && x < map.w as i32 && y < map.h as i32;
+                    inside && !matches!(map.get(x as usize, y as usize), 'w' | '=')
+                };
+                draw_bridge(c, cell, 0.0, upright_bridge(land, x as i32, y as i32));
+            } else if !matches!(what, '~' | 'w') {
                 draw_tile(what, c, cell, time, paint);
             }
         }

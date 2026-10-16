@@ -55,6 +55,11 @@ pub enum Tile {
     /// then starts again. The number is what it shows at the start. The
     /// robot mustn't get rained on.
     Rain(u8),
+    /// A river or pond: the robot can't go in.
+    Water,
+    /// A wooden bridge over the water. It holds the robot once: when the
+    /// robot steps off, it falls in, and there's only water left.
+    Bridge,
 }
 
 /// A rain cloud stays dry for this many ticks (showing 3, 2, 1), then rains
@@ -77,7 +82,7 @@ impl Tile {
     fn passable(self) -> bool {
         matches!(
             self,
-            Tile::Grass | Tile::Stump | Tile::Ice | Tile::Open | Tile::Rain(_)
+            Tile::Grass | Tile::Stump | Tile::Ice | Tile::Open | Tile::Rain(_) | Tile::Bridge
         )
     }
 }
@@ -532,7 +537,8 @@ pub struct LevelDef {
     id: &'static str,
     /// Legend: `.` grass, `#` tree, `@` rock, `?` mystery (tree or grass),
     /// `~` ice, `k` key, `D` locked door, `1` to `3` a rain cloud (counting
-    /// down from that), `R` robot start, `*` star.
+    /// down from that), `w` water, `=` a bridge (it falls in once the robot
+    /// has crossed it), `R` robot start, `*` star.
     map: &'static [&'static str],
     /// How many blocks fit in the program for this level.
     slots: usize,
@@ -733,6 +739,23 @@ pub const CHAPTERS: &[Chapter] = &[
             // A locked door stops the robot sliding, even with the key: it has to
             // step onto the door to open it.
             level("72", &["*D~~~R", "@@@@@~", "k~~~~~"]),
+        ],
+    },
+    // A bridge holds the robot once: step off, and it falls in. No going
+    // back the same way, so plan the way round.
+    Chapter {
+        name: "Bridges",
+        levels: &[
+            level("d-bridge", &["www", "R=*", "www"]).demo("R R"),
+            // Hop from island to island.
+            level("bridge-hop", &["wwwwwww", "R=*=*=*", "wwwwwww"]),
+            // Over for the key, then back over the other bridge for the door.
+            level("bridge-key", &["R.=.k", "..w..", "..=..", "D@w@@", "*@w@@"]),
+            // The island with one bridge has to come last: the other one
+            // has a bridge in and a bridge out.
+            level("bridge-order", &["R.....", "=ww=w=", "*ww*.."]),
+            // A fallen bridge is water: the next slide stops before it.
+            level("bridge-ice", &["R~~=~~.", "@@@@*@@"]),
         ],
     },
     // Not enough slots without repeating a block; then with the axe, and keys.
@@ -1178,6 +1201,8 @@ impl Level {
                     '~' => Tile::Ice,
                     'D' => Tile::Door,
                     '1'..='3' => Tile::Rain(ch as u8 - b'0'),
+                    'w' => Tile::Water,
+                    '=' => Tile::Bridge,
                     _ => Tile::Grass,
                 });
                 match ch {
@@ -1185,7 +1210,7 @@ impl Level {
                     '*' => stars.push(p),
                     '?' => mysteries.push(p),
                     'k' => keys.push(p),
-                    '.' | '#' | '@' | '~' | 'D' | '1'..='3' => {}
+                    '.' | '#' | '@' | '~' | 'D' | 'w' | '=' | '1'..='3' => {}
                     other => panic!("unknown level tile {other:?}"),
                 }
             }
@@ -1288,11 +1313,13 @@ impl Level {
 pub enum Event {
     /// Drove from `from` to where the robot is now: one tile, or further if
     /// it slid on ice. Anything picked up or unlocked is where it stopped.
+    /// `fell`: it stepped off a bridge at `from`, which fell in.
     Moved {
         from: Pos,
         star: bool,
         key: bool,
         unlocked: bool,
+        fell: bool,
     },
     Chopped(Pos),
     /// Slept a tick.
@@ -1413,6 +1440,11 @@ impl World {
                     self.tiles[(next.1 * self.w + next.0) as usize] = Tile::Open;
                     unlocked = true;
                 }
+                // Stepping off a bridge, it falls in behind the robot.
+                let fell = self.tile(from) == Some(Tile::Bridge);
+                if fell {
+                    self.tiles[(from.1 * self.w + from.0) as usize] = Tile::Water;
+                }
                 self.pos = next;
                 // On ice the robot keeps sliding until something stops it. A
                 // locked door stops it too, key or no key. Sliding into
@@ -1439,6 +1471,7 @@ impl World {
                     star: star.is_some(),
                     key: key.is_some(),
                     unlocked,
+                    fell,
                 })
             }
             (Cmd::Chop(_), Some(Tile::Tree)) => {
@@ -2474,6 +2507,7 @@ mod tests {
             star: false,
             key: false,
             unlocked: false,
+            fell: false,
         };
         // Grass stops the slide, and so does a rock (without a bump).
         assert_eq!(world.act(Cmd::Move(Dir::Right)), Ok(moved((0, 0))));
@@ -2487,6 +2521,21 @@ mod tests {
         let star = world.act(Cmd::Move(Dir::Left));
         assert!(matches!(star, Ok(Event::Moved { star: true, .. })));
         assert_eq!(world.pos, (0, 2));
+    }
+
+    #[test]
+    fn bridges_hold_the_robot_once() {
+        let mut world = Level::parse(&level("test", &["R=.", "ww.", "*=."])).world();
+        assert!(world.act(Cmd::Move(Dir::Down)).is_err(), "water");
+        world.act(Cmd::Move(Dir::Right)).unwrap();
+        let off = world.act(Cmd::Move(Dir::Right));
+        assert!(matches!(off, Ok(Event::Moved { fell: true, .. })));
+        assert_eq!(world.tile((1, 0)), Some(Tile::Water), "it fell in");
+        assert!(world.act(Cmd::Move(Dir::Left)).is_err(), "no way back");
+        // A slide stops on a bridge, like on grass.
+        let mut world = Level::parse(&level("test", &["R~~=~*"])).world();
+        world.act(Cmd::Move(Dir::Right)).unwrap();
+        assert_eq!(world.pos, (3, 0));
     }
 
     #[test]

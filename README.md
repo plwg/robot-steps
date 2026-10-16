@@ -12,7 +12,7 @@ stars. There's no reading required.
 |---|---|
 | ![Three players, each with their own robot and progress](docs/players.png) | ![Level 48: the main program calls the ● and ▲ functions, and the robot is partway through ▲, chopping a tree](docs/level.png) |
 
-Across 100 levels in 16 chapters, numbered within each chapter (`3-2`), it
+Across 104 levels in 17 chapters, numbered within each chapter (`3-2`), it
 introduces, in the order programming is usually taught:
 
 1. **Moving:** up, down, left and right, in order
@@ -23,36 +23,39 @@ introduces, in the order programming is usually taught:
 4. **Keys and doors:** a locked door needs a key, and each key opens one
    door. The robot remembers what it's carrying, so the order matters: fetch
    the key first, even when it's the other way
-5. **Repeat:** run one block several times when there aren't enough slots
-6. **If:** mystery clouds become a tree or grass each run, so the robot has
+5. **Bridges:** a bridge holds the robot once, then falls in the river
+   behind it. There's no going back the same way, so plan the way round
+   (and which island to leave till last)
+6. **Repeat:** run one block several times when there aren't enough slots
+7. **If:** mystery clouds become a tree or grass each run, so the robot has
    to look before it chops: "if there's a tree to the right { chop it }". Tap
    "if", pick what to look for (shown as map tiles: a tree, rock, star, ice,
    key, door, grass, or the edge of the map, whichever the level offers),
    then which way. The blocks to run go inside its brackets
-7. **Loops:** repeat a whole group of blocks
-8. **If inside loops:** "if there's a tree to the right { chop it }" or "if
+8. **Loops:** repeat a whole group of blocks
+9. **If inside loops:** "if there's a tree to the right { chop it }" or "if
    there's a star above { fetch it }" in a loop: one rule handles whatever
    the robot finds, wherever it finds it
-9. **Else:** "if there's a tree to the right { go down } otherwise { go
+10. **Else:** "if there's a tree to the right { go down } otherwise { go
    right }". The grey ✗ between the blocks marks where the "otherwise" part
    starts
-10. **Not:** "if there's *no* tree above { fetch the star }". In the
+11. **Not:** "if there's *no* tree above { fetch the star }". In the
     "if" choices, the red "no" sign crosses out what to look for
-11. **Repeat until:** "keep going until there's a wall that way". The robot
+12. **Repeat until:** "keep going until there's a wall that way". The robot
     looks before each time round. Mystery clouds decide how far it is, so no
     fixed number of times would do. One that would go round for ever (back
     where it started, and still no wall) stops and shakes red
-12. **Functions:** extra strips of blocks named with a shape (● and ▲) that
+13. **Functions:** extra strips of blocks named with a shape (● and ▲) that
     the main program calls whenever it needs them
-13. **Functions + if:** "if" blocks inside functions
-14. **Function numbers:** call ● with a number (set with repeat), and
+14. **Functions + if:** "if" blocks inside functions
+15. **Function numbers:** call ● with a number (set with repeat), and
     inside it a count can be "●'s number" instead of a fixed one, so one
     function makes stairs of 1, 2 and 3
-15. **Rain:** rain clouds count down 3, 2, 1, rain for a bit, then start
+16. **Rain:** rain clouds count down 3, 2, 1, rain for a bit, then start
     again. Every action takes a tick, so sleep while it rains (the sleep
     block, Zzz, repeated like any other) or hurry across before it starts. Being
     under a cloud when it rains is getting wet, and the end of the run
-16. **All together**
+17. **All together**
 
 Throughout, a **slider** along the top runs the program ahead of time, while
 it's being built: drag it to see where the robot would be just before any
@@ -90,7 +93,7 @@ draws a big, easy-to-spot pointer.
 
 The pencil button on the level map opens the map maker. Tap the green **+**
 to start a map, then pick a tile on the right (grass, tree, rock, ice,
-mystery cloud, key, door, rain cloud, star or the robot) and tap or drag
+water, bridge, mystery cloud, key, door, rain cloud, star or the robot) and tap or drag
 across the map to paint it. Tapping a rain cloud again counts it down: 3, 2,
 1, 3. Under the map, − and + change its width and height and how many slots
 the program has (and each function, when there are functions). The buttons

@@ -92,6 +92,8 @@ const WOOD: Color = Color::new(0.55, 0.35, 0.2, 1.0);
 const LEAF: Color = Color::new(0.16, 0.55, 0.22, 1.0);
 const ICE: Color = Color::new(0.8, 0.93, 0.99, 1.0);
 const ICE_DARK: Color = Color::new(0.72, 0.88, 0.97, 1.0);
+const WATER: Color = Color::new(0.22, 0.52, 0.86, 1.0);
+const WATER_LIGHT: Color = Color::new(0.62, 0.83, 1.0, 1.0);
 const ICE_BLUE: Color = Color::new(0.1, 0.75, 0.95, 1.0);
 const GOLD: Color = Color::new(0.98, 0.75, 0.15, 1.0);
 const KEY_GOLD: Color = Color::new(0.88, 0.6, 0.05, 1.0);
@@ -464,6 +466,59 @@ fn draw_ice(x: f32, y: f32, cell: f32, dark: bool) {
         let q = p + vec2(0.22, -0.22) * cell;
         draw_line(p.x, p.y, q.x, q.y, w * cell, shine);
     }
+}
+
+/// A tile of water, with ripples drifting across.
+pub fn draw_water(x: f32, y: f32, cell: f32, time: f32) {
+    draw_rectangle(x, y, cell, cell, WATER);
+    for (k, (a, b)) in [(0.15, 0.28), (0.5, 0.6), (0.18, 0.82)]
+        .into_iter()
+        .enumerate()
+    {
+        let drift = ((time * 0.8 + k as f32 * 1.7).sin() * 0.06 + a) * cell;
+        let p = vec2(x + drift, y + b * cell);
+        let t = 0.035 * cell;
+        for i in 0..2 {
+            let q = p + vec2(i as f32 * 0.14 * cell, 0.0);
+            let top = q + vec2(0.07 * cell, -0.04 * cell);
+            draw_line(q.x, q.y, top.x, top.y, t, WATER_LIGHT);
+            draw_line(top.x, top.y, q.x + 0.14 * cell, q.y, t, WATER_LIGHT);
+        }
+    }
+}
+
+/// A wooden bridge across a tile, crossed left to right (or, `upright`, up
+/// and down), `sink` (0 to 1) of the way to falling in: it drops and fades
+/// as it goes.
+pub fn draw_bridge(c: Vec2, cell: f32, sink: f32, upright: bool) {
+    let s = cell;
+    let c = c + vec2(0.0, sink * s * 0.25);
+    let fade = |col: Color| Color::new(col.r, col.g, col.b, col.a * (1.0 - sink));
+    let len = s * (1.0 - sink * 0.3);
+    // A rectangle `along` the way across and `side` to one side, turned
+    // for an upright bridge.
+    let rect = |along: f32, side: f32, l: f32, w: f32, colour: Color| {
+        if upright {
+            draw_rectangle(c.x + side, c.y + along, w, l, colour);
+        } else {
+            draw_rectangle(c.x + along, c.y + side, l, w, colour);
+        }
+    };
+    // Rails along each side, and planks across.
+    let rail = fade(darker(WOOD, 0.8));
+    rect(-len / 2.0, -s * 0.32, len, s * 0.07, rail);
+    rect(-len / 2.0, s * 0.25, len, s * 0.07, rail);
+    for k in 0..4 {
+        let along = -len / 2.0 + len * (k as f32 + 0.1) / 4.0;
+        rect(along, -s * 0.26, len * 0.2, s * 0.52, fade(DOOR_WOOD));
+    }
+}
+
+/// Is the bridge at `(x, y)` crossed up and down: is there land above or
+/// below it (and none to the sides)? `land` says if there's land at a spot.
+pub fn upright_bridge(land: impl Fn(i32, i32) -> bool, x: i32, y: i32) -> bool {
+    let sides = land(x - 1, y) || land(x + 1, y);
+    !sides && (land(x, y - 1) || land(x, y + 1))
 }
 
 /// A key, lying on its side, `size` long.
@@ -1886,6 +1941,14 @@ impl Game {
 
     /// The current action has finished: celebrate, or carry on with the program.
     fn finish_action(&mut self) {
+        if let Some(Event::Moved {
+            from, fell: true, ..
+        }) = self.event
+        {
+            let (c, cell) = self.cell_centre(from);
+            self.burst(c, cell, WATER_LIGHT, false);
+            self.sfx(Sfx::Splash);
+        }
         if let Some(Event::Moved { star, key, .. }) = self.event {
             let (c, cell) = self.cell_centre(self.world.pos);
             if star {
@@ -2908,6 +2971,8 @@ impl Game {
                 let dark = (x + y) % 2 == 1;
                 if self.world.tile((x, y)) == Some(Tile::Ice) {
                     draw_ice(px, py, cell, dark);
+                } else if matches!(self.world.tile((x, y)), Some(Tile::Water | Tile::Bridge)) {
+                    draw_water(px, py, cell, self.time);
                 } else {
                     let colour = if dark { GRASS_DARK } else { GRASS };
                     draw_rectangle(px, py, cell, cell, colour);
@@ -2926,6 +2991,24 @@ impl Game {
 
         let chopping = match (self.mode, self.event) {
             (Mode::Chopping, Some(Event::Chopped(p))) => Some(p),
+            _ => None,
+        };
+        // A bridge turns to match the land it joins. (The level's own map
+        // says, as one that's falling in is already water.)
+        let start = l.world();
+        let land = |x, y| {
+            start
+                .tile((x, y))
+                .is_some_and(|t| !matches!(t, Tile::Water | Tile::Bridge))
+        };
+        let upright = |x, y| upright_bridge(land, x, y);
+        let falling = match (self.mode, self.event) {
+            (
+                Mode::Moving,
+                Some(Event::Moved {
+                    from, fell: true, ..
+                }),
+            ) => Some(from),
             _ => None,
         };
         for y in 0..l.h {
@@ -2950,7 +3033,13 @@ impl Game {
                     Some(Tile::Mystery) => draw_mystery(c, cell, 1.0, self.time),
                     Some(Tile::Door) => draw_door(c, cell, 0.0),
                     Some(Tile::Open) => draw_door(c, cell, self.door_open((x, y))),
-                    Some(Tile::Grass | Tile::Ice | Tile::Rain(_)) | None => {}
+                    Some(Tile::Bridge) => draw_bridge(c, cell, 0.0, upright(x, y)),
+                    // The bridge the robot is stepping off, falling in.
+                    Some(Tile::Water) if falling == Some((x, y)) => {
+                        let sink = (self.timer / self.move_time()).min(1.0);
+                        draw_bridge(c, cell, sink, upright(x, y));
+                    }
+                    Some(Tile::Grass | Tile::Ice | Tile::Water | Tile::Rain(_)) | None => {}
                 }
             }
         }

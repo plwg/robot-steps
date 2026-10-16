@@ -13,7 +13,7 @@ const MAX_ROW_SLOTS: usize = 11;
 
 /// What can be painted, as the level text uses it. A rain cloud is painted
 /// as `3`; tapping one again counts it down to 2, then 1, then 3 again.
-pub const PAINTS: [char; 10] = ['.', '#', '@', '~', '?', 'k', 'D', '3', '*', 'R'];
+pub const PAINTS: [char; 12] = ['.', '#', '@', '~', 'w', '=', '?', 'k', 'D', '3', '*', 'R'];
 
 /// Can a map's cell hold `c`: something painted, or a rain cloud at any
 /// count?
