@@ -66,9 +66,20 @@ pub struct Block {
     pub times: u8,
 }
 
-/// One slot in a program strip: a block, one end of a loop, or a call to a
-/// function. Blocks between a `LoopStart` and the next `LoopEnd` (or the end
-/// of the strip, if the loop is still open) run `times` times over.
+/// What an "if" block looks for, next to the robot.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Sense {
+    Tree,
+    Star,
+}
+
+/// One slot in a program strip: a block, one end of a loop or an "if", or a
+/// call to a function.
+///
+/// Blocks between a `LoopStart` and the next `LoopEnd` (or the end of the
+/// strip, if the loop is still open) run `times` times over. Blocks between an
+/// `IfStart` and the next `IfEnd` (or the end of the loop or strip it's in)
+/// only run if the robot sees `sense` next to it in direction `dir`.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Item {
     Block(Block),
@@ -76,17 +87,23 @@ pub enum Item {
         times: u8,
     },
     LoopEnd,
+    IfStart {
+        sense: Sense,
+        dir: Dir,
+    },
+    IfEnd,
     /// Run function strip `n` (1 or 2). Only allowed in the main strip, so a
     /// function can never call itself forever.
     Call(usize),
 }
 
-/// How many tiles a strip uses. Loop brackets sit between tiles, so only
-/// blocks and calls count towards a level's slots.
+/// How many tiles a strip uses. Loop brackets and the end of an "if" sit
+/// between tiles; blocks, calls and the start of an "if" (which shows what
+/// it's looking for) each take a tile.
 pub fn tiles(items: &[Item]) -> usize {
     items
         .iter()
-        .filter(|i| matches!(i, Item::Block(_) | Item::Call(_)))
+        .filter(|i| matches!(i, Item::Block(_) | Item::Call(_) | Item::IfStart { .. }))
         .count()
 }
 
@@ -94,10 +111,19 @@ pub fn tiles(items: &[Item]) -> usize {
 /// strips 1 and 2 are the functions.
 pub type Loc = (usize, usize);
 
-/// One action in a running program, with what to show while it happens.
+/// One step of a running program.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Step {
+    /// Do an instruction.
+    Do(Cmd),
+    /// Look in direction `dir` for `sense`: `yes` if it's there.
+    Test { sense: Sense, dir: Dir, yes: bool },
+}
+
+/// One step in a running program, with what to show while it happens.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Exec {
-    pub cmd: Cmd,
+    pub step: Step,
     /// Which program slot this came from.
     pub at: Loc,
     /// How many runs of that block are left, counting this one.
@@ -118,69 +144,105 @@ struct Context {
     main_loop: Option<(usize, u8)>,
 }
 
-/// Unroll a program (the main strip, then any functions) into the actions it
-/// performs, in order.
-pub fn expand(strips: &[Vec<Item>]) -> Vec<Exec> {
-    let mut out = Vec::new();
+/// Runs a program on a copy of the world, recording each step. What an "if"
+/// does depends on what the robot finds, so the program has to be run to be
+/// unrolled.
+struct Runner<'a> {
+    strips: &'a [Vec<Item>],
+    world: World,
+    out: Vec<Exec>,
+    /// The robot got stuck, or collected every star: nothing more happens.
+    stopped: bool,
+}
+
+/// Unroll a program (the main strip, then any functions) into the steps it
+/// takes when run in `world`, in order. It stops after a step that gets the
+/// robot stuck, or that collects the last star, just as the game does.
+pub fn expand(strips: &[Vec<Item>], world: &World) -> Vec<Exec> {
+    let mut runner = Runner {
+        strips,
+        world: world.clone(),
+        out: Vec::new(),
+        stopped: false,
+    };
     if !strips.is_empty() {
         let top = Context {
             call: None,
             main_loop: None,
         };
-        run_strip(strips, 0, top, &mut out);
+        runner.run(0, 0, strips[0].len(), None, top);
     }
-    out
+    runner.out
 }
 
-fn run_strip(strips: &[Vec<Item>], strip: usize, ctx: Context, out: &mut Vec<Exec>) {
-    let items = &strips[strip];
-    let mut i = 0;
-    while i < items.len() {
-        if let Item::LoopStart { times } = items[i] {
-            let end = (i + 1..items.len())
-                .find(|&j| items[j] == Item::LoopEnd)
-                .unwrap_or(items.len());
-            for k in 0..times {
-                for j in i + 1..end {
-                    run_item(strips, (strip, j), Some((i, times - k)), ctx, out);
+impl Runner<'_> {
+    fn emit(&mut self, step: Step, at: Loc, left: u8, in_loop: Option<(usize, u8)>, ctx: Context) {
+        if self.stopped {
+            return;
+        }
+        let main = at.0 == 0;
+        self.out.push(Exec {
+            step,
+            at,
+            left,
+            main_loop: if main { in_loop } else { ctx.main_loop },
+            fn_loop: if main { None } else { in_loop },
+            call: ctx.call,
+        });
+        if let Step::Do(cmd) = step {
+            let stuck = self.world.act(cmd).is_err();
+            self.stopped = stuck || self.world.stars.is_empty();
+        }
+    }
+
+    /// Run slots `from..to` of a strip.
+    fn run(
+        &mut self,
+        strip: usize,
+        from: usize,
+        to: usize,
+        in_loop: Option<(usize, u8)>,
+        ctx: Context,
+    ) {
+        let items = &self.strips[strip];
+        let mut i = from;
+        while i < to && !self.stopped {
+            match items[i] {
+                Item::LoopStart { times } => {
+                    let end = (i + 1..to)
+                        .find(|&j| items[j] == Item::LoopEnd)
+                        .unwrap_or(to);
+                    for k in 0..times {
+                        self.run(strip, i + 1, end, Some((i, times - k)), ctx);
+                    }
+                    i = end + 1;
                 }
-            }
-            i = end + 1;
-        } else {
-            run_item(strips, (strip, i), None, ctx, out);
-            i += 1;
-        }
-    }
-}
-
-fn run_item(
-    strips: &[Vec<Item>],
-    (strip, i): Loc,
-    in_loop: Option<(usize, u8)>,
-    ctx: Context,
-    out: &mut Vec<Exec>,
-) {
-    match strips[strip][i] {
-        Item::Block(b) => {
-            for r in 0..b.times {
-                out.push(Exec {
-                    cmd: b.cmd,
-                    at: (strip, i),
-                    left: b.times - r,
-                    main_loop: if strip == 0 { in_loop } else { ctx.main_loop },
-                    fn_loop: if strip == 0 { None } else { in_loop },
-                    call: ctx.call,
-                });
+                Item::IfStart { sense, dir } => {
+                    let end = (i + 1..to).find(|&j| items[j] == Item::IfEnd).unwrap_or(to);
+                    let yes = self.world.sees(sense, dir);
+                    self.emit(Step::Test { sense, dir, yes }, (strip, i), 1, in_loop, ctx);
+                    if yes {
+                        self.run(strip, i + 1, end, in_loop, ctx);
+                    }
+                    i = end + 1;
+                }
+                Item::Block(b) => {
+                    for r in 0..b.times {
+                        self.emit(Step::Do(b.cmd), (strip, i), b.times - r, in_loop, ctx);
+                    }
+                    i += 1;
+                }
+                Item::Call(f) if strip == 0 && f < self.strips.len() => {
+                    let inner = Context {
+                        call: Some(i),
+                        main_loop: in_loop,
+                    };
+                    self.run(f, 0, self.strips[f].len(), None, inner);
+                    i += 1;
+                }
+                Item::Call(_) | Item::LoopEnd | Item::IfEnd => i += 1,
             }
         }
-        Item::Call(f) if strip == 0 && f < strips.len() => {
-            let inner = Context {
-                call: Some(i),
-                main_loop: in_loop,
-            };
-            run_strip(strips, f, inner, out);
-        }
-        _ => {}
     }
 }
 
@@ -194,6 +256,9 @@ pub struct LevelDef {
     repeat: bool,
     check: bool,
     loops: bool,
+    /// Which "if" blocks the level has: looking for trees, and for stars.
+    if_tree: bool,
+    if_star: bool,
     /// How many function strips (0, 1 or 2), and how many slots each has.
     functions: usize,
     fn_slots: usize,
@@ -207,6 +272,8 @@ const fn level(map: &'static [&'static str]) -> LevelDef {
         repeat: false,
         check: false,
         loops: false,
+        if_tree: false,
+        if_star: false,
         functions: 0,
         fn_slots: 0,
     }
@@ -231,6 +298,14 @@ impl LevelDef {
     const fn with_loops(mut self, slots: usize) -> Self {
         self.loops = true;
         self.with_repeat(slots)
+    }
+
+    /// Unlock "if" blocks (and loops) that look for trees and/or stars, and
+    /// limit the program to `slots`, so an "if" in a loop is needed to fit.
+    const fn with_ifs(mut self, slots: usize, tree: bool, star: bool) -> Self {
+        self.if_tree = tree;
+        self.if_star = star;
+        self.with_loops(slots)
     }
 
     /// Add `functions` function strips of `fn_slots` each (plus loops), and
@@ -325,10 +400,13 @@ pub const LEVELS: &[LevelDef] = &[
     level(&["R..@@@@@@", "@@...@@@@", "@@@@...@@", "@@@@@@..*"]).with_loops(5),
     level(&["...@...@..*", ".@.@.@.@.@@", "R@...@...@@"]).with_loops(8),
     level(&["R#.#.#.#*"]).with_axe().with_loops(4),
-    level(&["R????*"]).with_check().with_loops(4),
-    level(&["R?@@@@", "@.?@@@", "@@.?@@", "@@@.?@", "@@@@.*"])
-        .with_check()
-        .with_loops(6),
+    // --- If: look before you act. Inside a loop, one rule handles whatever
+    // the robot finds, wherever it finds it ---
+    level(&["R#..#.##.*"]).with_axe().with_ifs(3, true, false),
+    level(&["@*@@*@**@", "R........"]).with_ifs(4, false, true),
+    level(&["@@**@@@*@", "R#..#.#.."])
+        .with_axe()
+        .with_ifs(6, true, true),
     // --- Functions: a strip of blocks with a shape for a name, which the
     // main program can run (call) as often as it likes. First a familiar map
     // (the zig-zag from the loop levels) ---
@@ -357,6 +435,8 @@ pub struct Level {
     pub repeat: bool,
     pub check: bool,
     pub loops: bool,
+    pub if_tree: bool,
+    pub if_star: bool,
     pub functions: usize,
     pub fn_slots: usize,
     /// Where the mystery clouds are.
@@ -402,6 +482,8 @@ impl Level {
             repeat: def.repeat,
             check: def.check,
             loops: def.loops,
+            if_tree: def.if_tree,
+            if_star: def.if_star,
             functions: def.functions,
             fn_slots: def.fn_slots,
             mysteries,
@@ -454,6 +536,12 @@ pub enum Event {
         at: Pos,
         tree: bool,
     },
+    /// An "if" looked at `at`: `yes` if it saw what it was looking for. (The
+    /// game uses this for its animation; `World::act` never returns it.)
+    Tested {
+        at: Pos,
+        yes: bool,
+    },
 }
 
 /// The changing state of a level while a program runs.
@@ -468,6 +556,17 @@ pub struct World {
 }
 
 impl World {
+    /// Is there a `sense` (a tree, or a star) right next to the robot, in
+    /// direction `dir`?
+    pub fn sees(&self, sense: Sense, dir: Dir) -> bool {
+        let (dx, dy) = dir.delta();
+        let next = (self.pos.0 + dx, self.pos.1 + dy);
+        match sense {
+            Sense::Tree => self.tile(next) == Some(Tile::Tree),
+            Sense::Star => self.stars.contains(&next),
+        }
+    }
+
     pub fn tile(&self, (x, y): Pos) -> Option<Tile> {
         let inside = x >= 0 && y >= 0 && x < self.w && y < self.h;
         inside.then(|| self.tiles[(y * self.w + x) as usize])
@@ -526,18 +625,24 @@ mod tests {
         (38, "[ R2 D ]3 R2"),
         (39, "[ U2 R2 D2 R2 ]2 U2 R2"),
         (40, "[ cR R2 ]4"),
-        (41, "[ ?R R ]5"),
-        (42, "[ ?R R D ]4 R"),
     ];
 
     /// Known solutions for the function levels: the main strip, then each
     /// function after a `|`. `f1` calls the first function.
     const FUNCTION_SOLUTIONS: &[(usize, &str)] = &[
-        (43, "f1 f1 f1 | U2 R2 D2 R2"),
-        (44, "f1 R f1 R3 f1 | R U2 D2"),
-        (45, "f1 R f1 | [ R U ]3"),
-        (46, "[ f1 ]3 | cR R U2 D2 R"),
-        (47, "f1 f2 f2 f1 f2 f1 | U2 D2 R | cR R"),
+        (44, "f1 f1 f1 | U2 R2 D2 R2"),
+        (45, "f1 R f1 R3 f1 | R U2 D2"),
+        (46, "f1 R f1 | [ R U ]3"),
+        (47, "[ f1 ]3 | cR R U2 D2 R"),
+        (48, "f1 f2 f2 f1 f2 f1 | U2 D2 R | cR R"),
+    ];
+
+    /// Known solutions for the "if" levels. `{tR` starts "if there's a tree to
+    /// the right", `{sU` "if there's a star above", and `}` ends it.
+    const IF_SOLUTIONS: &[(usize, &str)] = &[
+        (41, "[ {tR cR } R ]9"),
+        (42, "[ {sU U D } R ]8"),
+        (43, "[ {tR cR } {sU U D } R ]8"),
     ];
 
     /// A whole program: strips separated by `|`.
@@ -562,6 +667,15 @@ mod tests {
             let mut chars = head.chars();
             let item = match (chars.next(), chars.next()) {
                 (Some('f'), None) => Item::Call(times as usize),
+                (Some('}'), None) => Item::IfEnd,
+                (Some('{'), Some(what)) => Item::IfStart {
+                    sense: if what == 't' {
+                        Sense::Tree
+                    } else {
+                        Sense::Star
+                    },
+                    dir: dir(chars.next().expect("{ needs a direction")),
+                },
                 (Some('['), None) => {
                     open = Some(items.len());
                     Item::LoopStart { times: 1 }
@@ -591,15 +705,16 @@ mod tests {
 
     /// Does this program win however the mysteries turn out?
     fn always_wins(level: &Level, strips: &[Vec<Item>]) -> bool {
-        let trace = expand(strips);
         level.outcomes().iter().all(|outcome| {
             let mut world = level.revealed(outcome);
-            for exec in &trace {
-                if world.act(exec.cmd).is_err() {
-                    return false;
-                }
-                if world.stars.is_empty() {
-                    return true;
+            for exec in expand(strips, &world.clone()) {
+                if let Step::Do(cmd) = exec.step {
+                    if world.act(cmd).is_err() {
+                        return false;
+                    }
+                    if world.stars.is_empty() {
+                        return true;
+                    }
                 }
             }
             false
@@ -610,7 +725,10 @@ mod tests {
     fn loop_levels_have_a_solution_that_fits() {
         let levels = all_levels();
         let loop_levels: Vec<usize> = (1..=levels.len())
-            .filter(|&n| levels[n - 1].loops && levels[n - 1].functions == 0)
+            .filter(|&n| {
+                let l = &levels[n - 1];
+                l.loops && l.functions == 0 && !l.if_tree && !l.if_star
+            })
             .collect();
         let solved: Vec<usize> = LOOP_SOLUTIONS.iter().map(|&(n, _)| n).collect();
         assert_eq!(loop_levels, solved, "every loop level needs a solution");
@@ -662,7 +780,7 @@ mod tests {
     /// Run a single-strip program in every outcome: `None` if it bumps into
     /// something in any of them.
     fn run(level: &Level, items: &[Item]) -> Option<Worlds> {
-        let trace = expand(&[items.to_vec()]);
+        let strips = [items.to_vec()];
         let mut worlds: Worlds = level
             .outcomes()
             .iter()
@@ -670,11 +788,13 @@ mod tests {
             .collect();
         for slot in &mut worlds {
             let Some(world) = slot else { continue };
-            for exec in &trace {
-                world.act(exec.cmd).ok()?;
-                if world.stars.is_empty() {
-                    *slot = None;
-                    break;
+            for exec in expand(&strips, &world.clone()) {
+                if let Step::Do(cmd) = exec.step {
+                    world.act(cmd).ok()?;
+                    if world.stars.is_empty() {
+                        *slot = None;
+                        break;
+                    }
                 }
             }
         }
@@ -813,6 +933,57 @@ mod tests {
     }
 
     #[test]
+    fn if_levels_have_a_solution_that_fits() {
+        let levels = all_levels();
+        let if_levels: Vec<usize> = (1..=levels.len())
+            .filter(|&n| levels[n - 1].if_tree || levels[n - 1].if_star)
+            .collect();
+        let solved: Vec<usize> = IF_SOLUTIONS.iter().map(|&(n, _)| n).collect();
+        assert_eq!(if_levels, solved, "every if level needs a solution");
+        for &(n, text) in IF_SOLUTIONS {
+            let level = &levels[n - 1];
+            let program = parse_program(text);
+            assert!(
+                tiles(&program) <= level.slots,
+                "level {n} solution too long"
+            );
+            assert!(always_wins(level, &[program]), "level {n} solution fails");
+        }
+    }
+
+    #[test]
+    fn if_levels_need_an_if() {
+        for (i, level) in all_levels().iter().enumerate() {
+            if (level.if_tree || level.if_star)
+                && let Some(program) = fits_with_loops(level, level.slots)
+            {
+                panic!("level {} fits without an if: {program:?}", i + 1);
+            }
+        }
+    }
+
+    #[test]
+    fn ifs_only_run_when_the_robot_sees_something() {
+        let world = Level::parse(&level(&["*..", ".R#", "..."])).world();
+        let steps = |text: &str| -> Vec<String> {
+            expand(&[parse_program(text)], &world)
+                .iter()
+                .map(|e| format!("{:?}", e.step))
+                .collect()
+        };
+        assert_eq!(
+            steps("{tR cR } {sU U }"),
+            [
+                "Test { sense: Tree, dir: Right, yes: true }",
+                "Do(Chop(Right))",
+                "Test { sense: Star, dir: Up, yes: false }",
+            ]
+        );
+        // Inside a loop, the "if" ends with the loop if it isn't closed.
+        assert_eq!(steps("[ {tD D } L ]2").len(), 4, "test, left, test, left");
+    }
+
+    #[test]
     fn loop_search_finds_loop_solutions() {
         // Sanity check for `fits_with_loops`: it finds the loop levels' answers.
         let levels = all_levels();
@@ -822,11 +993,30 @@ mod tests {
         }
     }
 
+    /// A big empty field with a far-off star, for unrolling programs.
+    fn open_field() -> World {
+        let mut rows = vec!["...............".to_string(); 15];
+        rows[0].replace_range(0..1, "*");
+        rows[7].replace_range(7..8, "R");
+        let rows: Vec<&'static str> = rows.into_iter().map(|r| &*r.leak()).collect();
+        Level::parse(&level(rows.leak())).world()
+    }
+
+    fn moves(strips: &[Vec<Item>]) -> Vec<String> {
+        expand(strips, &open_field())
+            .iter()
+            .map(|e| match e.step {
+                Step::Do(cmd) => format!("{cmd:?}"),
+                test => format!("{test:?}"),
+            })
+            .collect()
+    }
+
     #[test]
     fn functions_unroll_where_they_are_called() {
         let strips = parse_strips("U [ f1 ]2 | R [ D ]2");
-        let trace = expand(&strips);
-        let cmds: Vec<String> = trace.iter().map(|e| format!("{:?}", e.cmd)).collect();
+        let trace = expand(&strips, &open_field());
+        let cmds = moves(&strips);
         assert_eq!(
             cmds,
             [
@@ -845,7 +1035,7 @@ mod tests {
         assert_eq!(trace[2].fn_loop, Some((1, 2)));
         assert_eq!(trace[5].main_loop, Some((1, 1)));
         // Calls inside a function are ignored, so nothing can loop forever.
-        assert_eq!(expand(&parse_strips("f1 | R f1")).len(), 1);
+        assert_eq!(moves(&parse_strips("f1 | R f1")).len(), 1);
     }
 
     #[test]
@@ -864,8 +1054,9 @@ mod tests {
 
     #[test]
     fn loops_unroll_in_order() {
-        let trace = expand(&[parse_program("U [ R2 D ]2 L")]);
-        let cmds: Vec<String> = trace.iter().map(|e| format!("{:?}", e.cmd)).collect();
+        let strips = [parse_program("U [ R2 D ]2 L")];
+        let trace = expand(&strips, &open_field());
+        let cmds = moves(&strips);
         assert_eq!(
             cmds,
             [
@@ -883,9 +1074,9 @@ mod tests {
         assert_eq!(trace[4].main_loop, Some((1, 1)));
         assert_eq!(trace[4].left, 2);
         // An unclosed loop runs to the end of the program.
-        assert_eq!(expand(&[parse_program("[ R ]3")]).len(), 3);
+        assert_eq!(moves(&[parse_program("[ R ]3")]).len(), 3);
         let open = parse_program("[ R ]3")[..2].to_vec();
-        assert_eq!(expand(&[open]).len(), 3);
+        assert_eq!(moves(&[open]).len(), 3);
     }
 
     struct Allow {

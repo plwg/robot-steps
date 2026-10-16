@@ -9,7 +9,9 @@ mod progress;
 
 use std::f32::consts::PI;
 
-use level::{Block, Cmd, Dir, Event, Exec, Item, Level, Loc, MAX_TIMES, Pos, Tile, World, tiles};
+use level::{
+    Block, Cmd, Dir, Event, Exec, Item, Level, Loc, MAX_TIMES, Pos, Sense, Step, Tile, World, tiles,
+};
 use macroquad::prelude::*;
 use macroquad::rand::gen_range;
 
@@ -60,6 +62,10 @@ const FN_COLOURS: [Color; 2] = [
     Color::new(0.35, 0.85, 0.95, 1.0),
 ];
 const CALL_INK: Color = Color::new(0.24, 0.27, 0.4, 1.0);
+const IF_LIME: Color = Color::new(0.5, 0.72, 0.1, 1.0);
+const IF_BAND: Color = Color::new(0.85, 0.94, 0.7, 1.0);
+const YES_GREEN: Color = Color::new(0.2, 0.75, 0.3, 1.0);
+const NO_GREY: Color = Color::new(0.55, 0.58, 0.62, 1.0);
 const LOOP_BAND: Color = Color::new(0.72, 0.9, 0.9, 1.0);
 const CLOUD: Color = Color::new(0.97, 0.97, 1.0, 1.0);
 const WOOD: Color = Color::new(0.55, 0.35, 0.2, 1.0);
@@ -528,6 +534,8 @@ enum Button {
     Check,
     Repeat,
     Loop,
+    /// Start (then pick a direction) or end an "if" block.
+    If(Sense),
     /// Add a call to function 1 or 2.
     Call(usize),
     Play,
@@ -700,7 +708,7 @@ impl Game {
 
     /// Does the program do anything at all?
     fn has_actions(&self) -> bool {
-        !level::expand(&self.strips).is_empty()
+        !level::expand(&self.strips, &self.world).is_empty()
     }
 
     /// The slot whose count the repeat button changes: the last block, or the
@@ -708,7 +716,7 @@ impl Game {
     fn count_slot(&self) -> Option<usize> {
         let items = self.prog();
         let last = items.len().checked_sub(1)?;
-        let (start, _) = loop_ends(items, last).unwrap_or((last, None));
+        let (start, _) = pair_ends(items, last).unwrap_or((last, None));
         matches!(items[start], Item::Block(_) | Item::LoopStart { .. }).then_some(start)
     }
 
@@ -739,6 +747,8 @@ impl Game {
             Button::Check => self.level().check,
             Button::Repeat => self.level().repeat,
             Button::Loop => self.level().loops,
+            Button::If(Sense::Tree) => self.level().if_tree,
+            Button::If(Sense::Star) => self.level().if_star,
             Button::Call(f) => f <= self.level().functions,
             _ => true,
         }
@@ -748,7 +758,12 @@ impl Game {
         let editing = self.mode == Mode::Edit;
         match button {
             Button::Arrow(_) | Button::Axe | Button::Check => editing && self.has_room(),
-            Button::Loop => editing && (self.has_room() || open_loop(self.prog()).is_some()),
+            // A loop can hold an "if", but an "if" can't hold a loop.
+            Button::Loop => {
+                let open_if = open_if(self.prog()).is_some();
+                editing && (open_loop(self.prog()).is_some() || (self.has_room() && !open_if))
+            }
+            Button::If(_) => editing && (self.has_room() || open_if(self.prog()).is_some()),
             // Calls only go in the main program.
             Button::Call(_) => editing && self.editing == 0 && self.has_room(),
             Button::Repeat => editing && self.count_slot().is_some(),
@@ -772,6 +787,10 @@ impl Game {
                 let cmd = match self.armed.take() {
                     Some(Button::Axe) => Cmd::Chop(dir),
                     Some(Button::Check) => Cmd::IfTreeChop(dir),
+                    Some(Button::If(sense)) => {
+                        self.prog_mut().push(Item::IfStart { sense, dir });
+                        return;
+                    }
                     _ => Cmd::Move(dir),
                 };
                 self.prog_mut().push(Item::Block(Block { cmd, times: 1 }));
@@ -785,8 +804,23 @@ impl Game {
                 Some(start) if start + 1 == self.prog().len() => {
                     self.prog_mut().pop();
                 }
-                Some(_) => self.prog_mut().push(Item::LoopEnd),
+                Some(_) => {
+                    // Closing the loop closes any "if" left open inside it.
+                    if open_if(self.prog()).is_some() {
+                        self.prog_mut().push(Item::IfEnd);
+                    }
+                    self.prog_mut().push(Item::LoopEnd);
+                }
                 None => self.prog_mut().push(Item::LoopStart { times: 2 }),
+            },
+            // With an "if" open, the button closes it; otherwise it's like the
+            // axe: tap it, then pick a direction.
+            Button::If(_) => match open_if(self.prog()) {
+                Some(start) if start + 1 == self.prog().len() => {
+                    self.prog_mut().pop();
+                }
+                Some(_) => self.prog_mut().push(Item::IfEnd),
+                None => self.armed = (self.armed != Some(button)).then_some(button),
             },
             Button::Call(f) => {
                 self.armed = None;
@@ -804,7 +838,6 @@ impl Game {
             Button::Play => {
                 self.armed = None;
                 self.reset_robot();
-                self.trace = level::expand(&self.strips);
                 self.start_run();
             }
             Button::Fullscreen => {
@@ -818,12 +851,16 @@ impl Game {
     fn start_run(&mut self) {
         let mysteries = self.level().mysteries.clone();
         if mysteries.is_empty() {
+            self.trace = level::expand(&self.strips, &self.world);
             self.act();
             return;
         }
         let outcomes = self.level().outcomes();
         let outcome = &outcomes[gen_range(0, outcomes.len())];
         self.world = self.level().revealed(outcome);
+        // A program runs the same way every time in the same world, so the
+        // whole run can be worked out now that the clouds are gone.
+        self.trace = level::expand(&self.strips, &self.world);
         for p in mysteries {
             let (c, cell) = self.cell_centre(p);
             self.burst(c, cell, CLOUD, false);
@@ -838,14 +875,26 @@ impl Game {
             self.set_mode(Mode::Sad);
             return;
         };
-        self.facing = exec.cmd.dir();
-        match self.world.act(exec.cmd) {
+        let cmd = match exec.step {
+            Step::Do(cmd) => cmd,
+            // An "if" looks before deciding.
+            Step::Test { dir, yes, .. } => {
+                self.facing = dir;
+                let (dx, dy) = dir.delta();
+                let at = (self.world.pos.0 + dx, self.world.pos.1 + dy);
+                self.event = Some(Event::Tested { at, yes });
+                self.set_mode(Mode::Checking);
+                return;
+            }
+        };
+        self.facing = cmd.dir();
+        match self.world.act(cmd) {
             Ok(event) => {
                 self.event = Some(event);
                 self.set_mode(match event {
                     Event::Moved { .. } => Mode::Moving,
                     Event::Chopped(_) => Mode::Chopping,
-                    Event::Checked { .. } => Mode::Checking,
+                    Event::Checked { .. } | Event::Tested { .. } => Mode::Checking,
                 });
             }
             Err(()) => {
@@ -960,6 +1009,8 @@ impl Game {
             (KeyCode::Q, Button::Check),
             (KeyCode::R, Button::Repeat),
             (KeyCode::L, Button::Loop),
+            (KeyCode::T, Button::If(Sense::Tree)),
+            (KeyCode::S, Button::If(Sense::Star)),
             (KeyCode::F, Button::Call(1)),
             (KeyCode::G, Button::Call(2)),
             (KeyCode::Space, Button::Play),
@@ -995,6 +1046,8 @@ impl Game {
             Button::Check,
             Button::Repeat,
             Button::Loop,
+            Button::If(Sense::Tree),
+            Button::If(Sense::Star),
             Button::Call(1),
             Button::Call(2),
         ]
@@ -1135,14 +1188,14 @@ impl Game {
         let mut items = Vec::new();
         for item in &self.strips[strip] {
             match item {
-                Item::LoopStart { .. } | Item::LoopEnd => {
+                Item::LoopStart { .. } | Item::LoopEnd | Item::IfEnd => {
                     if matches!(item, Item::LoopStart { .. }) {
                         wrap(&mut x, &mut y, &mut col);
                     }
                     items.push(Rect::new(x - SLOT_GAP / 2.0, y, BRACKET_W, SLOT));
                     x += BRACKET_W;
                 }
-                Item::Block(_) | Item::Call(_) => {
+                Item::Block(_) | Item::Call(_) | Item::IfStart { .. } => {
                     wrap(&mut x, &mut y, &mut col);
                     items.push(Rect::new(x, y, SLOT, SLOT));
                     x += step;
@@ -1196,7 +1249,7 @@ impl Game {
             self.editing = strip;
             let items = &mut self.strips[strip];
             {
-                match loop_ends(items, i) {
+                match pair_ends(items, i) {
                     Some((start, end)) => {
                         if let Some(end) = end {
                             items.remove(end);
@@ -1372,11 +1425,24 @@ impl Game {
                 draw_mystery(self.cell_centre(p).0, cell, 1.0 - t, self.time);
             }
         }
-        // While checking, a ring shows where the robot is looking.
-        if let (Mode::Checking, Some(Event::Checked { at, .. })) = (self.mode, self.event) {
+        // While checking, a ring shows where the robot is looking. For an
+        // "if", it turns green (yes) or grey (no) halfway through.
+        let looking = match (self.mode, self.event) {
+            (Mode::Checking, Some(Event::Checked { at, .. })) => Some((at, WHITE)),
+            (Mode::Checking, Some(Event::Tested { at, yes })) => {
+                let colour = match (self.timer > CHECK_TIME * 0.5, yes) {
+                    (false, _) => WHITE,
+                    (true, true) => YES_GREEN,
+                    (true, false) => NO_GREY,
+                };
+                Some((at, colour))
+            }
+            _ => None,
+        };
+        if let Some((at, colour)) = looking {
             let c = self.cell_centre(at).0;
             let pulse = (self.time * 8.0).sin() * 0.5 + 0.5;
-            draw_circle_lines(c.x, c.y, cell * (0.42 + pulse * 0.04), 5.0, WHITE);
+            draw_circle_lines(c.x, c.y, cell * (0.42 + pulse * 0.04), 5.0, colour);
         }
 
         // Stars bob gently; leftover stars wiggle when the robot is sad.
@@ -1474,13 +1540,15 @@ impl Game {
         match item {
             Item::Block(b) => Self::block_colour(b.cmd),
             Item::LoopStart { .. } | Item::LoopEnd => REPEAT_TEAL,
+            Item::IfStart { .. } | Item::IfEnd => IF_LIME,
             Item::Call(_) => CALL_INK,
         }
     }
 
     fn draw_item(r: Rect, item: Item, colour: Color, badge: Option<u8>) {
-        if let Item::LoopStart { .. } | Item::LoopEnd = item {
-            Self::draw_loop_bracket(r, item == Item::LoopEnd, colour, badge);
+        if let Item::LoopStart { .. } | Item::LoopEnd | Item::IfEnd = item {
+            let close = !matches!(item, Item::LoopStart { .. });
+            Self::draw_loop_bracket(r, close, colour, badge);
             return;
         }
         rounded_rect(r.x, r.y + 4.0, r.w, r.h, 12.0, darker(colour, 0.7));
@@ -1491,7 +1559,8 @@ impl Game {
                 Cmd::Chop(dir) => draw_chop_icon(r.center(), r.w, dir),
                 Cmd::IfTreeChop(dir) => draw_check_icon(r.center(), r.w, dir),
             },
-            Item::LoopStart { .. } | Item::LoopEnd => {}
+            Item::LoopStart { .. } | Item::LoopEnd | Item::IfEnd => {}
+            Item::IfStart { sense, dir } => draw_if_icon(r.center(), r.w, sense, dir),
             Item::Call(f) => draw_shape(r.center(), r.w * 0.28, f),
         }
         if let Some(n) = badge {
@@ -1559,26 +1628,41 @@ impl Game {
             _ => (e.at.0 == strip).then_some(e.at.1),
         });
 
-        // A band behind each loop shows which blocks are inside it. An open
-        // loop also takes in the next empty tile, where new blocks will go.
-        let open = open_loop(items);
-        for (i, item) in items.iter().enumerate() {
-            if !matches!(item, Item::LoopStart { .. }) {
-                continue;
+        // A band behind each loop (teal) and each "if" (green) shows which
+        // blocks are inside it. An open one also takes in the next empty
+        // tile, where new blocks will go.
+        for loops in [true, false] {
+            for (i, item) in items.iter().enumerate() {
+                let (is_start, band) = match item {
+                    Item::LoopStart { .. } => (loops, LOOP_BAND),
+                    Item::IfStart { .. } => (!loops, IF_BAND),
+                    _ => (false, LOOP_BAND),
+                };
+                if !is_start {
+                    continue;
+                }
+                let end = pair_ends(items, i).and_then(|(_, e)| e);
+                let mut rects: Vec<Rect> =
+                    layout.items[i..=end.unwrap_or(items.len() - 1)].to_vec();
+                if end.is_none() {
+                    rects.extend(layout.empty.first());
+                }
+                draw_band(&rects, band);
             }
-            let end = loop_ends(items, i).and_then(|(_, e)| e);
-            let mut rects: Vec<Rect> = layout.items[i..=end.unwrap_or(items.len() - 1)].to_vec();
-            if end.is_none() {
-                rects.extend(layout.empty.first());
-            }
-            draw_band(&rects);
         }
+        // The next empty tile pulses inside whatever is still open.
+        let pulse_with = match (open_if(items), open_loop(items)) {
+            (Some(_), _) => Some((IF_BAND, IF_LIME)),
+            (None, Some(_)) => Some((LOOP_BAND, REPEAT_TEAL)),
+            (None, None) => None,
+        };
         for (k, r) in layout.empty.iter().enumerate() {
-            let colour = if k == 0 && open.is_some() {
-                let pulse = (self.time * 4.0).sin() * 0.5 + 0.5;
-                mix(LOOP_BAND, REPEAT_TEAL, 0.3 + pulse * 0.3)
-            } else {
-                SLOT_EMPTY
+            let colour = match (k, pulse_with) {
+                (0, Some((band, strong))) => {
+                    let pulse = (self.time * 4.0).sin() * 0.5 + 0.5;
+                    mix(band, strong, 0.3 + pulse * 0.3)
+                }
+                _ => SLOT_EMPTY,
             };
             rounded_rect(r.x, r.y, r.w, r.h, 12.0, colour);
         }
@@ -1617,9 +1701,16 @@ impl Game {
                 Item::Block(b) if running_block => current.map(|e| e.left).filter(|_| b.times > 1),
                 Item::Block(b) => (b.times > 1).then_some(b.times),
                 Item::LoopStart { times } => looping.or(Some(times)),
-                Item::LoopEnd | Item::Call(_) => None,
+                Item::LoopEnd | Item::IfStart { .. } | Item::IfEnd | Item::Call(_) => None,
             };
             Self::draw_item(r, item, colour, badge);
+            // An "if" shows its answer once the robot has looked: yes or no.
+            if running_block
+                && let Some(Step::Test { yes, .. }) = current.map(|e| e.step)
+                && self.timer > CHECK_TIME * 0.5
+            {
+                draw_answer(vec2(r.right() - 4.0, r.y + 4.0), yes);
+            }
         }
     }
 
@@ -1640,6 +1731,7 @@ impl Game {
                 Button::Axe => (AXE_BROWN, 18.0),
                 Button::Check => (CHECK_SLATE, 18.0),
                 Button::Repeat | Button::Loop => (REPEAT_TEAL, 18.0),
+                Button::If(_) => (IF_LIME, 18.0),
                 Button::Call(_) => (CALL_INK, 18.0),
                 Button::Play if self.running() => (STOP_RED, half),
                 Button::Play => (PLAY_GREEN, half),
@@ -1651,7 +1743,12 @@ impl Game {
             let size = half * 2.0;
             // An armed tool glows to say "now pick which way", and an open
             // loop glows until it's closed.
-            let open_loop = button == Button::Loop && open_loop(self.prog()).is_some();
+            // An open loop or "if" makes its button glow until it's closed.
+            let open_loop = match button {
+                Button::Loop => open_loop(self.prog()).is_some(),
+                Button::If(_) => open_if(self.prog()).is_some(),
+                _ => false,
+            };
             if self.armed == Some(button) || open_loop {
                 let g = 6.0 + ((self.time * 6.0).sin() * 0.5 + 0.5) * 4.0;
                 rounded_rect(
@@ -1678,6 +1775,7 @@ impl Game {
                 Button::Arrow(dir) => match self.armed {
                     Some(Button::Axe) => draw_chop_icon(c, size, dir),
                     Some(Button::Check) => draw_check_icon(c, size, dir),
+                    Some(Button::If(sense)) => draw_if_icon(c, size, sense, dir),
                     _ => draw_arrow(c, size * 0.8, dir, WHITE),
                 },
                 Button::Axe => draw_axe_badge(c, size * 0.75),
@@ -1691,6 +1789,12 @@ impl Game {
                     draw_label(&format!("{}", self.next_times()), c, 28.0, WHITE);
                 }
                 Button::Call(f) => draw_shape(c, half * 0.55, f),
+                // While an "if" is open, the button shows how to close it.
+                Button::If(_) if open_loop => {
+                    let r = Rect::new(c.x - half, c.y - half, size, size);
+                    draw_bracket(r, c.x + size * 0.1, false, WHITE);
+                }
+                Button::If(sense) => draw_if_icon(c, size, sense, Dir::Right),
                 Button::Loop => {
                     let r = Rect::new(c.x - half, c.y - half, size, size);
                     // While a loop is open, the button shows how to close it.
@@ -1748,7 +1852,7 @@ struct StripLayout {
 }
 
 /// Shade behind `rects` (the inside of a loop), one row at a time.
-fn draw_band(rects: &[Rect]) {
+fn draw_band(rects: &[Rect], colour: Color) {
     let mut rows: Vec<(f32, f32, f32)> = Vec::new();
     for r in rects {
         match rows.iter_mut().find(|(y, _, _)| *y == r.y) {
@@ -1766,7 +1870,7 @@ fn draw_band(rects: &[Rect]) {
             right - left + 12.0,
             SLOT + 12.0,
             16.0,
-            LOOP_BAND,
+            colour,
         );
     }
 }
@@ -1780,17 +1884,61 @@ fn open_loop(items: &[Item]) -> Option<usize> {
     (!closed).then_some(start)
 }
 
-/// The two ends of the loop that slot `i` belongs to, if it's a loop end.
-fn loop_ends(items: &[Item], i: usize) -> Option<(usize, Option<usize>)> {
-    let start = match items[i] {
-        Item::LoopStart { .. } => i,
-        Item::LoopEnd => items[..i]
-            .iter()
-            .rposition(|it| matches!(it, Item::LoopStart { .. }))?,
+/// The start of an "if" in `items` that hasn't been closed yet.
+fn open_if(items: &[Item]) -> Option<usize> {
+    let start = items
+        .iter()
+        .rposition(|i| matches!(i, Item::IfStart { .. }))?;
+    let closed = items[start..].contains(&Item::IfEnd);
+    (!closed).then_some(start)
+}
+
+/// The two ends of the loop or "if" that slot `i` is one end of.
+fn pair_ends(items: &[Item], i: usize) -> Option<(usize, Option<usize>)> {
+    let (is_start, close): (fn(&Item) -> bool, Item) = match items[i] {
+        Item::LoopStart { .. } | Item::LoopEnd => {
+            (|it| matches!(it, Item::LoopStart { .. }), Item::LoopEnd)
+        }
+        Item::IfStart { .. } | Item::IfEnd => {
+            (|it| matches!(it, Item::IfStart { .. }), Item::IfEnd)
+        }
         Item::Block(_) | Item::Call(_) => return None,
     };
-    let end = (start + 1..items.len()).find(|&j| items[j] == Item::LoopEnd);
+    let start = if is_start(&items[i]) {
+        i
+    } else {
+        items[..i].iter().rposition(is_start)?
+    };
+    let end = (start + 1..items.len()).find(|&j| items[j] == close);
     Some((start, end))
+}
+
+/// What an "if" looks for: a little tree or star.
+fn draw_sense(c: Vec2, size: f32, sense: Sense) {
+    match sense {
+        Sense::Tree => draw_tree(c - vec2(0.0, size * 0.12), size, 1.0, 0.0),
+        Sense::Star => draw_star(c, size * 0.42, 0.0, STAR),
+    }
+}
+
+/// "If there's a tree (or star) that way": the thing, an arrow, and a "?".
+fn draw_if_icon(c: Vec2, size: f32, sense: Sense, dir: Dir) {
+    draw_sense(c - vec2(size * 0.16, size * 0.02), size * 0.55, sense);
+    draw_arrow(c + vec2(size * 0.24, size * 0.16), size * 0.4, dir, WHITE);
+    draw_question(c + vec2(size * 0.24, -size * 0.22), size * 0.36, WHITE);
+}
+
+/// The answer to an "if": a green tick, or a grey cross.
+fn draw_answer(c: Vec2, yes: bool) {
+    draw_circle(c.x, c.y, 15.0, WHITE);
+    draw_circle(c.x, c.y, 13.0, if yes { YES_GREEN } else { NO_GREY });
+    if yes {
+        draw_line(c.x - 6.0, c.y, c.x - 1.5, c.y + 5.0, 3.5, WHITE);
+        draw_line(c.x - 1.5, c.y + 5.0, c.x + 6.5, c.y - 5.0, 3.5, WHITE);
+    } else {
+        draw_line(c.x - 5.0, c.y - 5.0, c.x + 5.0, c.y + 5.0, 3.5, WHITE);
+        draw_line(c.x - 5.0, c.y + 5.0, c.x + 5.0, c.y - 5.0, 3.5, WHITE);
+    }
 }
 
 /// "Chop that way": an arrow with a little axe tucked in the corner.

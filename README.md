@@ -6,16 +6,19 @@ stars. There's no reading required.
 
 ![Level 47: the main program calls the ● and ▲ functions, and the robot is partway through ▲, chopping a tree](docs/screenshot.png)
 
-Across 47 levels it introduces:
+Across 48 levels it introduces:
 
 - **Sequences:** up, down, left and right, in order
 - **Debugging:** when the robot bumps into something, the step that went wrong
   shakes red, and the program stays put to be fixed
 - **Actions:** an axe block chops down trees (but not rocks)
 - **Repeat:** run one block several times when there aren't enough slots
-- **Conditionals:** mystery clouds become a tree or grass each run, so the
-  robot has to check before it chops
+- **Conditionals (first version):** mystery clouds become a tree or grass each
+  run, so the robot has to check before it chops
 - **Loops:** repeat a whole group of blocks
+- **If blocks:** "if there's a tree to the right { chop it }" or "if there's a
+  star above { fetch it }", with the blocks to run inside brackets. Inside a
+  loop, one rule handles whatever the robot finds, wherever it finds it
 - **Functions:** extra strips of blocks named with a shape (● and ▲) that the
   main program calls whenever it needs them
 
@@ -57,6 +60,7 @@ Under WSL the game runs on the GPU, but WSL caps full screen at 4K to about
 | Q, then an arrow | If there's a tree that way, chop it |
 | R / 2-9 | Repeat the last block (or loop) |
 | L | Open or close a loop |
+| T / S, then an arrow | Start "if there's a tree / star that way" (again to close) |
 | F / G | Call function ● / ▲ |
 | Tab | Switch between the main program and the functions |
 | Space / Enter | Play or stop |
