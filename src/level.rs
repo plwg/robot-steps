@@ -254,6 +254,68 @@ impl Runner<'_> {
     }
 }
 
+/// A whole program written as text: strips separated by `|`. Within a strip,
+/// `R` moves right, `cR` chops right, `?R` checks right, and a number repeats
+/// a block. `[` opens a loop and `]4` closes it, running it 4 times. `{tR`
+/// starts "if there's a tree to the right", `{sU` "if there's a star above",
+/// and `}` ends it. `f1` calls the first function.
+pub fn parse_strips(text: &str) -> Vec<Vec<Item>> {
+    text.split('|').map(parse_program).collect()
+}
+
+pub fn parse_program(text: &str) -> Vec<Item> {
+    let dir = |c: char| match c {
+        'U' => Dir::Up,
+        'D' => Dir::Down,
+        'L' => Dir::Left,
+        'R' => Dir::Right,
+        _ => panic!("bad direction {c}"),
+    };
+    let mut items = Vec::new();
+    let mut open = None;
+    for token in text.split_whitespace() {
+        let digits = token.trim_start_matches(|c: char| !c.is_ascii_digit());
+        let times: u8 = digits.parse().unwrap_or(1);
+        let head = &token[..token.len() - digits.len()];
+        let mut chars = head.chars();
+        let item = match (chars.next(), chars.next()) {
+            (Some('f'), None) => Item::Call(times as usize),
+            (Some('}'), None) => Item::IfEnd,
+            (Some('{'), Some(what)) => Item::IfStart {
+                sense: if what == 't' {
+                    Sense::Tree
+                } else {
+                    Sense::Star
+                },
+                dir: dir(chars.next().expect("{ needs a direction")),
+            },
+            (Some('['), None) => {
+                open = Some(items.len());
+                Item::LoopStart { times: 1 }
+            }
+            (Some(']'), None) => {
+                items[open.take().expect("] without [")] = Item::LoopStart { times };
+                Item::LoopEnd
+            }
+            (Some('c'), Some(d)) => Item::Block(Block {
+                cmd: Cmd::Chop(dir(d)),
+                times,
+            }),
+            (Some('?'), Some(d)) => Item::Block(Block {
+                cmd: Cmd::IfTreeChop(dir(d)),
+                times,
+            }),
+            (Some(d), None) => Item::Block(Block {
+                cmd: Cmd::Move(dir(d)),
+                times,
+            }),
+            _ => panic!("bad token {token}"),
+        };
+        items.push(item);
+    }
+    items
+}
+
 pub struct LevelDef {
     /// Legend: `.` grass, `#` tree, `@` rock, `?` mystery (tree or grass),
     /// `R` robot start, `*` star.
@@ -270,6 +332,9 @@ pub struct LevelDef {
     /// How many function strips (0, 1 or 2), and how many slots each has.
     functions: usize,
     fn_slots: usize,
+    /// A demo level comes with its program already written, to show how a
+    /// new block is used: just press play.
+    demo: Option<&'static str>,
 }
 
 const fn level(map: &'static [&'static str]) -> LevelDef {
@@ -284,6 +349,7 @@ const fn level(map: &'static [&'static str]) -> LevelDef {
         if_star: false,
         functions: 0,
         fn_slots: 0,
+        demo: None,
     }
 }
 
@@ -324,6 +390,12 @@ impl LevelDef {
         self.with_loops(slots)
     }
 
+    /// Make this a demo, with `program` (see `parse_strips`) already in place.
+    const fn demo(mut self, program: &'static str) -> Self {
+        self.demo = Some(program);
+        self
+    }
+
     /// Unlock the "if tree, chop" block (and the axe).
     const fn with_check(mut self) -> Self {
         self.chop = true;
@@ -333,7 +405,10 @@ impl LevelDef {
 }
 
 pub const LEVELS: &[LevelDef] = &[
+    // Each new block is first shown in a demo, with the program already
+    // written: press play and watch.
     // --- Moving ---
+    level(&["R.@", "@.*"]).demo("R D R"),
     level(&["R...*"]),
     level(&["R", ".", ".", "*"]),
     level(&["R..", "##.", "##*"]),
@@ -347,11 +422,15 @@ pub const LEVELS: &[LevelDef] = &[
     level(&["R#*#*", ".#.#.", "....."]),
     level(&["*...*", ".#.#.", "..R..", ".#.#.", "*...*"]),
     // --- The axe: chop trees, but rocks stay put ---
+    level(&["R", "#", "*"]).with_axe().demo("cD D D"),
     level(&["R#*"]).with_axe(),
     level(&["..@*", "R.#.", "..@."]).with_axe(),
     level(&["R@*", ".@.", "#@.", "..."]).with_axe(),
     level(&["R##.*"]).with_axe(),
     // --- Repeat: not enough slots without it ---
+    level(&["R....", "@@@@.", "@@@@*"])
+        .with_repeat(2)
+        .demo("R4 D2"),
     level(&["R.......*"]).with_repeat(3),
     level(&["R.....", "#####.", "#####.", "#####.", "*....."]).with_repeat(4),
     level(&["R.....", "#####.", "*...#.", "#.###.", "#....."]).with_repeat(6),
@@ -386,6 +465,7 @@ pub const LEVELS: &[LevelDef] = &[
     level(&["R.......", "#######.", "........", ".#######", "*......."]).with_repeat(5),
     // --- If: mystery clouds turn into a tree or grass each time you press
     // play, so the robot has to check before it chops ---
+    level(&["R", "?", "*"]).with_check().demo("?D D D"),
     level(&["R?*"]).with_check(),
     level(&["R.?.*"]).with_check(),
     level(&["R?@", "@.@", "@?*"]).with_check(),
@@ -399,6 +479,9 @@ pub const LEVELS: &[LevelDef] = &[
         .with_repeat(14),
     // --- Loops: repeat a whole group of blocks. First two familiar maps
     // (levels 7 and 11) with too few slots to do them the old way ---
+    level(&["R@@@", "..@@", "@..@", "@@.*"])
+        .with_loops(2)
+        .demo("[ D R ]3"),
     level(&["R.##", "#..#", "##.*"]).with_loops(4),
     level(&["R#*#*", ".#.#.", "....."]).with_loops(5),
     level(&[
@@ -410,7 +493,14 @@ pub const LEVELS: &[LevelDef] = &[
     level(&["R#.#.#.#*"]).with_axe().with_loops(4),
     // --- If: look before you act. Inside a loop, one rule handles whatever
     // the robot finds, wherever it finds it ---
+    level(&["R.##..#*"])
+        .with_axe()
+        .with_ifs(3, true, false)
+        .demo("[ {tR cR } R ]7"),
     level(&["R#..#.##.*"]).with_axe().with_ifs(3, true, false),
+    level(&["@**@*", "R...."])
+        .with_ifs(4, false, true)
+        .demo("[ {sU U D } R ]5"),
     level(&["@*@@*@**@", "R........"]).with_ifs(4, false, true),
     level(&["@@**@@@*@", "R#..#.#.."])
         .with_axe()
@@ -418,6 +508,9 @@ pub const LEVELS: &[LevelDef] = &[
     // --- Functions: a strip of blocks with a shape for a name, which the
     // main program can run (call) as often as it likes. First a familiar map
     // (the zig-zag from the loop levels) ---
+    level(&["*@@*@*", ".@@.@.", "R....."])
+        .with_functions(5, 1, 2)
+        .demo("f1 R3 f1 R2 f1 | U2 D2"),
     level(&["...@...@..*", ".@.@.@.@.@@", "R@...@...@@"]).with_functions(3, 1, 4),
     level(&["@*@*@@@*", "@.@.@@@.", "R......."]).with_functions(5, 1, 3),
     level(&[
@@ -427,6 +520,10 @@ pub const LEVELS: &[LevelDef] = &[
     level(&["@*@*@*", "@.@.@.", "R#.#.#"])
         .with_axe()
         .with_functions(4, 1, 5),
+    level(&["*@*@*", ".@.@.", "R#.#."])
+        .with_axe()
+        .with_functions(5, 2, 2)
+        .demo("f1 f2 f1 f2 f1 | U2 D2 | cR R2"),
     level(&["*@@*@*", ".@@.@.", "R.##.#"])
         .with_axe()
         .with_functions(6, 2, 3),
@@ -524,6 +621,11 @@ pub struct Level {
     pub fn_slots: usize,
     /// Where the mystery clouds are.
     pub mysteries: Vec<Pos>,
+    /// The level's number on the map. Demos aren't numbered: they share the
+    /// number of the level they come before.
+    pub number: usize,
+    /// A demo's program, already written.
+    pub demo: Option<Vec<Vec<Item>>>,
 }
 
 impl Level {
@@ -570,6 +672,17 @@ impl Level {
             functions: def.functions,
             fn_slots: def.fn_slots,
             mysteries,
+            number: 0,
+            demo: def.demo.map(parse_strips),
+        }
+    }
+
+    /// What the save file calls this level: its number, or `d` and the
+    /// number for a demo. Numbers stay the same when demos are added.
+    pub fn key(&self) -> String {
+        match self.demo {
+            Some(_) => format!("d{}", self.number),
+            None => self.number.to_string(),
         }
     }
 
@@ -690,7 +803,15 @@ impl World {
 }
 
 pub fn all_levels() -> Vec<Level> {
-    LEVELS.iter().map(Level::parse).collect()
+    let mut levels: Vec<Level> = LEVELS.iter().map(Level::parse).collect();
+    let mut number = levels.iter().filter(|l| l.demo.is_none()).count() + 1;
+    for level in levels.iter_mut().rev() {
+        if level.demo.is_none() {
+            number -= 1;
+        }
+        level.number = number;
+    }
+    levels
 }
 
 #[cfg(test)]
@@ -746,62 +867,58 @@ mod tests {
         (52, "[ {sD D U } R2 D ]5"),
     ];
 
-    /// A whole program: strips separated by `|`.
-    fn parse_strips(text: &str) -> Vec<Vec<Item>> {
-        text.split('|').map(parse_program).collect()
+    /// The levels with numbers, in order (so level `n` is at `n - 1`),
+    /// leaving out the demos.
+    fn numbered() -> Vec<Level> {
+        all_levels()
+            .into_iter()
+            .filter(|l| l.demo.is_none())
+            .collect()
     }
 
-    fn parse_program(text: &str) -> Vec<Item> {
-        let dir = |c: char| match c {
-            'U' => Dir::Up,
-            'D' => Dir::Down,
-            'L' => Dir::Left,
-            'R' => Dir::Right,
-            _ => panic!("bad direction {c}"),
-        };
-        let mut items = Vec::new();
-        let mut open = None;
-        for token in text.split_whitespace() {
-            let digits = token.trim_start_matches(|c: char| !c.is_ascii_digit());
-            let times: u8 = digits.parse().unwrap_or(1);
-            let head = &token[..token.len() - digits.len()];
-            let mut chars = head.chars();
-            let item = match (chars.next(), chars.next()) {
-                (Some('f'), None) => Item::Call(times as usize),
-                (Some('}'), None) => Item::IfEnd,
-                (Some('{'), Some(what)) => Item::IfStart {
-                    sense: if what == 't' {
-                        Sense::Tree
-                    } else {
-                        Sense::Star
-                    },
-                    dir: dir(chars.next().expect("{ needs a direction")),
-                },
-                (Some('['), None) => {
-                    open = Some(items.len());
-                    Item::LoopStart { times: 1 }
-                }
-                (Some(']'), None) => {
-                    items[open.take().expect("] without [")] = Item::LoopStart { times };
-                    Item::LoopEnd
-                }
-                (Some('c'), Some(d)) => Item::Block(Block {
-                    cmd: Cmd::Chop(dir(d)),
-                    times,
-                }),
-                (Some('?'), Some(d)) => Item::Block(Block {
-                    cmd: Cmd::IfTreeChop(dir(d)),
-                    times,
-                }),
-                (Some(d), None) => Item::Block(Block {
-                    cmd: Cmd::Move(dir(d)),
-                    times,
-                }),
-                _ => panic!("bad token {token}"),
-            };
-            items.push(item);
+    #[test]
+    fn demos_show_a_program_that_wins() {
+        let levels = all_levels();
+        for (i, level) in levels.iter().enumerate() {
+            let Some(strips) = &level.demo else { continue };
+            let n = level.number;
+            let next = &levels[i + 1];
+            assert!(
+                next.demo.is_none() && next.number == n,
+                "demo d{n} must come just before level {n}"
+            );
+            assert_eq!(strips.len(), 1 + level.functions, "demo d{n}: strips");
+            assert!(tiles(&strips[0]) <= level.slots, "demo d{n}: too long");
+            for f in &strips[1..] {
+                assert!(tiles(f) <= level.fn_slots, "demo d{n}: function too long");
+                assert!(
+                    !f.iter().any(|i| matches!(i, Item::Call(_))),
+                    "demo d{n}: functions can't call functions"
+                );
+            }
+            assert_eq!(
+                level.check,
+                !level.mysteries.is_empty(),
+                "demo d{n}: mysteries and the check block go together"
+            );
+            assert!(always_wins(level, strips), "demo d{n} doesn't win");
         }
-        items
+    }
+
+    #[test]
+    fn levels_keep_their_numbers_and_keys() {
+        let levels = all_levels();
+        let keys: Vec<String> = levels.iter().map(Level::key).collect();
+        assert_eq!(keys[..3], ["d1", "1", "2"]);
+        let unique: HashSet<&String> = keys.iter().collect();
+        assert_eq!(unique.len(), keys.len(), "save keys must be unique");
+        let numbers: Vec<usize> = numbered().iter().map(|l| l.number).collect();
+        assert_eq!(numbers, (1..=numbers.len()).collect::<Vec<_>>());
+        // Levels already played keep their number: 13 is still the first
+        // axe level, and 48 the first with two functions.
+        let numbered = numbered();
+        assert!(numbered[12].chop && (numbered[12].w, numbered[12].h) == (3, 1));
+        assert_eq!(numbered[47].functions, 2);
     }
 
     /// Does this program win however the mysteries turn out?
@@ -824,7 +941,7 @@ mod tests {
 
     #[test]
     fn loop_levels_have_a_solution_that_fits() {
-        let levels = all_levels();
+        let levels = numbered();
         let loop_levels: Vec<usize> = (1..=levels.len())
             .filter(|&n| {
                 let l = &levels[n - 1];
@@ -846,7 +963,7 @@ mod tests {
 
     #[test]
     fn function_levels_have_a_solution_that_fits() {
-        let levels = all_levels();
+        let levels = numbered();
         let function_levels: Vec<usize> = (1..=levels.len())
             .filter(|&n| levels[n - 1].functions > 0)
             .collect();
@@ -1020,7 +1137,7 @@ mod tests {
 
     #[test]
     fn function_levels_need_a_function() {
-        for (i, level) in all_levels().iter().enumerate() {
+        for (i, level) in numbered().iter().enumerate() {
             if level.functions > 0
                 && let Some(program) = fits_with_loops(level, level.slots)
             {
@@ -1035,7 +1152,7 @@ mod tests {
 
     #[test]
     fn if_levels_have_a_solution_that_fits() {
-        let levels = all_levels();
+        let levels = numbered();
         let if_levels: Vec<usize> = (1..=levels.len())
             .filter(|&n| {
                 let l = &levels[n - 1];
@@ -1057,7 +1174,7 @@ mod tests {
 
     #[test]
     fn if_levels_need_an_if() {
-        for (i, level) in all_levels().iter().enumerate() {
+        for (i, level) in numbered().iter().enumerate() {
             if (level.if_tree || level.if_star)
                 && let Some(program) = fits_with_loops(level, level.slots)
             {
@@ -1090,7 +1207,7 @@ mod tests {
     #[test]
     fn loop_search_finds_loop_solutions() {
         // Sanity check for `fits_with_loops`: it finds the loop levels' answers.
-        let levels = all_levels();
+        let levels = numbered();
         for &(n, _) in LOOP_SOLUTIONS {
             let level = &levels[n - 1];
             assert!(fits_with_loops(level, level.slots).is_some(), "level {n}");
@@ -1144,7 +1261,7 @@ mod tests {
 
     #[test]
     fn loop_levels_need_a_loop() {
-        for (i, level) in all_levels().iter().enumerate() {
+        for (i, level) in numbered().iter().enumerate() {
             if level.loops {
                 let without = fewest_blocks(level, Allow::level(level)).unwrap_or(usize::MAX);
                 assert!(
@@ -1249,7 +1366,7 @@ mod tests {
 
     #[test]
     fn every_level_is_solvable_within_its_slots() {
-        for (i, level) in all_levels().iter().enumerate() {
+        for (i, level) in numbered().iter().enumerate() {
             let n = i + 1;
             assert!(!level.stars.is_empty(), "level {n} has no stars");
             assert!(level.slots <= MAX_PROGRAM, "level {n} has too many slots");
@@ -1271,7 +1388,7 @@ mod tests {
 
     #[test]
     fn repeat_levels_need_repeat() {
-        for (i, level) in all_levels().iter().enumerate() {
+        for (i, level) in numbered().iter().enumerate() {
             if level.repeat {
                 let allow = Allow {
                     repeat: false,
@@ -1289,7 +1406,7 @@ mod tests {
 
     #[test]
     fn axe_levels_need_the_axe() {
-        for (i, level) in all_levels().iter().enumerate() {
+        for (i, level) in numbered().iter().enumerate() {
             if level.chop && !level.check {
                 let allow = Allow {
                     chop: false,
@@ -1307,7 +1424,7 @@ mod tests {
 
     #[test]
     fn check_levels_need_the_check() {
-        for (i, level) in all_levels().iter().enumerate() {
+        for (i, level) in numbered().iter().enumerate() {
             if level.check {
                 let allow = Allow {
                     check: false,

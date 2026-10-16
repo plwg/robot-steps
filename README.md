@@ -30,7 +30,9 @@ Across 60 levels it introduces:
 - **Functions:** extra strips of blocks named with a shape (● and ▲) that the
   main program calls whenever it needs them
 
-Each new tool starts on a map from earlier in the game, with too few slots
+Each new block is first shown in a demo level (▶ on the map): the program is
+already written, so just press play and watch how it's used. Then each new
+tool starts on a map from earlier in the game, with too few slots
 to solve it the old way, before moving on to new maps.
 
 Three players each have their own robot colour and their own progress. A
@@ -97,6 +99,8 @@ version to GitHub Pages (`.github/workflows/pages.yml`).
 ## Levels
 
 Levels live in `src/level.rs` as small text maps: `R` robot, `*` star,
-`#` tree, `@` rock, `?` mystery and `.` grass. `cargo test` proves that every
+`#` tree, `@` rock, `?` mystery and `.` grass. A demo level adds its program
+as text with `.demo(...)`. Demos aren't numbered, so adding one never
+renumbers the levels in anyone's save. `cargo test` proves that every
 level can be solved within its slots, and that each tool is actually needed
 where it's introduced.

@@ -1,5 +1,8 @@
 //! Which levels have been finished, for each of the three players, saved
-//! between games as a list of level numbers in a small text file per player.
+//! between games as a list of level keys (numbers, and `d13` and so on for
+//! demos) in a small text file per player.
+
+use std::collections::HashSet;
 
 /// How many players (save slots) there are.
 pub const SLOTS: usize = 3;
@@ -9,20 +12,21 @@ fn name(slot: usize) -> String {
     format!("progress-{}.txt", slot + 1)
 }
 
-/// Finished levels for one player, one flag per level. Missing or unreadable
-/// progress just means nothing is finished yet. Before there were players,
-/// progress was kept in `progress.txt`; that becomes the first player's.
-pub fn load(slot: usize, levels: usize) -> Vec<bool> {
+/// Finished levels for one player, one flag per level key. Missing or
+/// unreadable progress just means nothing is finished yet. Before there were
+/// players, progress was kept in `progress.txt`; that becomes the first
+/// player's.
+pub fn load(slot: usize, keys: &[String]) -> Vec<bool> {
     let text = store::read(&name(slot))
         .or_else(|| (slot == 0).then(|| store::read("progress.txt")).flatten())
         .unwrap_or_default();
-    parse(&text, levels)
+    parse(&text, keys)
 }
 
 /// Save one player's finished levels. Failing to save shouldn't stop the
 /// game, so errors are ignored.
-pub fn save(slot: usize, solved: &[bool]) {
-    store::write(&name(slot), &format(solved));
+pub fn save(slot: usize, keys: &[String], solved: &[bool]) {
+    store::write(&name(slot), &format(keys, solved));
 }
 
 /// Saves are small text files in a folder: `%APPDATA%\RobotSteps` on
@@ -97,25 +101,23 @@ mod store {
     }
 }
 
-fn parse(text: &str, levels: usize) -> Vec<bool> {
-    let mut solved = vec![false; levels];
-    for n in text
-        .split_whitespace()
-        .filter_map(|w| w.parse::<usize>().ok())
-    {
-        if (1..=levels).contains(&n) {
-            solved[n - 1] = true;
-        }
-    }
-    solved
+/// A demo counts as done once the level after it is, so demos added before
+/// levels a player has already finished don't send them back.
+fn parse(text: &str, keys: &[String]) -> Vec<bool> {
+    let done: HashSet<&str> = text.split_whitespace().collect();
+    keys.iter()
+        .map(|k| done.contains(k.as_str()) || k.strip_prefix('d').is_some_and(|n| done.contains(n)))
+        .collect()
 }
 
-fn format(solved: &[bool]) -> String {
-    let numbers: Vec<String> = (1..=solved.len())
-        .filter(|&n| solved[n - 1])
-        .map(|n| n.to_string())
+fn format(keys: &[String], solved: &[bool]) -> String {
+    let done: Vec<&str> = keys
+        .iter()
+        .zip(solved)
+        .filter(|&(_, &d)| d)
+        .map(|(k, _)| k.as_str())
         .collect();
-    numbers.join(" ") + "\n"
+    done.join(" ") + "\n"
 }
 
 #[cfg(test)]
@@ -124,9 +126,19 @@ mod tests {
 
     #[test]
     fn round_trips_and_ignores_junk() {
-        let solved = [true, false, true, true];
-        assert_eq!(format(&solved), "1 3 4\n");
-        assert_eq!(parse(&format(&solved), 4), solved);
-        assert_eq!(parse("2 oops 0 99\n", 3), [false, true, false]);
+        let keys: Vec<String> = ["d1", "1", "2", "d3", "3"].map(String::from).to_vec();
+        let solved = [true, false, true, true, false];
+        assert_eq!(format(&keys, &solved), "d1 2 d3\n");
+        assert_eq!(parse(&format(&keys, &solved), &keys), solved);
+        assert_eq!(
+            parse("2 oops 0 99\n", &keys),
+            [false, false, true, false, false]
+        );
+    }
+
+    #[test]
+    fn demos_before_finished_levels_count_as_done() {
+        let keys: Vec<String> = ["d1", "1", "2", "d3", "3"].map(String::from).to_vec();
+        assert_eq!(parse("1 2\n", &keys), [true, true, true, false, false]);
     }
 }

@@ -493,13 +493,21 @@ fn draw_robot(c: Vec2, cell: f32, face: Face, look: Vec2, time: f32, lift: f32, 
     }
 }
 
-fn draw_play_icon(c: Vec2, r: f32) {
+fn draw_play_icon(c: Vec2, r: f32, color: Color) {
     draw_triangle(
         c + vec2(-r * 0.35, -r * 0.45),
         c + vec2(-r * 0.35, r * 0.45),
         c + vec2(r * 0.5, 0.0),
-        WHITE,
+        color,
     );
+}
+
+/// A level's number, or for a demo (which is for watching) a play sign.
+fn draw_level_label(level: &Level, c: Vec2, size: f32, color: Color) {
+    match level.demo {
+        Some(_) => draw_play_icon(c + vec2(size * 0.06, 0.0), size * 0.95, color),
+        None => draw_label(&level.number.to_string(), c, size, color),
+    }
 }
 
 /// A "backspace" key shape: remove the last step.
@@ -617,6 +625,8 @@ struct Particle {
 
 struct Game {
     levels: Vec<Level>,
+    /// What the save files call each level.
+    keys: Vec<String>,
     idx: usize,
     solved: Vec<bool>,
     /// The main program (strip 0), then each function.
@@ -712,11 +722,13 @@ impl Kind {
 impl Game {
     fn new(fullscreen: bool) -> Game {
         let levels = level::all_levels();
-        let solved = progress::load(0, levels.len());
+        let keys: Vec<String> = levels.iter().map(Level::key).collect();
+        let solved = progress::load(0, &keys);
         let idx = 0;
         let world = levels[idx].world();
         let mut game = Game {
             levels,
+            keys,
             idx,
             solved,
             strips: vec![Vec::new()],
@@ -753,15 +765,17 @@ impl Game {
 
     /// Re-read how far each player has got, for the player cards.
     fn count_finished(&mut self) {
-        let n = self.levels.len();
         for slot in 0..progress::SLOTS {
-            self.finished[slot] = progress::load(slot, n).iter().filter(|&&d| d).count();
+            self.finished[slot] = progress::load(slot, &self.keys)
+                .iter()
+                .filter(|&&d| d)
+                .count();
         }
     }
 
     fn choose_player(&mut self, slot: usize) {
         self.slot = slot;
-        self.solved = progress::load(slot, self.levels.len());
+        self.solved = progress::load(slot, &self.keys);
         self.open_map();
     }
 
@@ -794,7 +808,11 @@ impl Game {
 
     fn load(&mut self, idx: usize) {
         self.idx = idx;
-        self.strips = vec![Vec::new(); 1 + self.level().functions];
+        // A demo starts with its program written, ready to play.
+        self.strips = match &self.level().demo {
+            Some(strips) => strips.clone(),
+            None => vec![Vec::new(); 1 + self.level().functions],
+        };
         self.editing = 0;
         self.last_added = None;
         self.particles.clear();
@@ -1115,7 +1133,7 @@ impl Game {
         self.event = None;
         if self.world.stars.is_empty() {
             self.solved[self.idx] = true;
-            progress::save(self.slot, &self.solved);
+            progress::save(self.slot, &self.keys, &self.solved);
             self.set_mode(Mode::Win);
             self.confetti();
             return;
@@ -1195,7 +1213,7 @@ impl Game {
                 match armed {
                     // Second tap on the same bin: erase that player.
                     Some((s, t)) if s == slot && self.time - t < 4.0 => {
-                        progress::save(slot, &vec![false; self.levels.len()]);
+                        progress::save(slot, &self.keys, &vec![false; self.keys.len()]);
                         self.count_finished();
                     }
                     _ => self.erase_armed = Some((slot, self.time)),
@@ -1366,7 +1384,7 @@ impl Game {
         if row % 2 == 1 {
             col = cols - 1 - col;
         }
-        let x_step = 154.0;
+        let x_step = ((W - 200.0) / (cols - 1) as f32).min(154.0);
         let y_step = (600.0 / rows as f32).min(115.0);
         let x0 = W / 2.0 - x_step * (cols - 1) as f32 / 2.0;
         vec2(x0 + col as f32 * x_step, 150.0 + row as f32 * y_step)
@@ -1663,7 +1681,7 @@ impl Game {
         let c = vec2(104.0, 36.0);
         draw_circle(c.x, c.y, 22.0, WHITE);
         draw_circle(c.x, c.y, 19.0, Kind::of(self.level()).colour());
-        draw_label(&format!("{}", self.idx + 1), c, 26.0, WHITE);
+        draw_level_label(self.level(), c, 26.0, WHITE);
     }
 
     /// Three cards, one per player, each with its own robot and progress.
@@ -1742,13 +1760,13 @@ impl Game {
             draw_circle(c.x, c.y + 4.0, r, darker(colour, 0.7));
             if self.solved[i] {
                 draw_circle(c.x, c.y, r, colour);
-                draw_label(&format!("{}", i + 1), c, 30.0, WHITE);
+                draw_level_label(&self.levels[i], c, 30.0, WHITE);
                 draw_star(c + vec2(24.0, -24.0), 17.0, 0.0, darker(STAR, 0.8));
                 draw_star(c + vec2(24.0, -26.0), 15.0, 0.0, STAR);
             } else {
                 draw_circle(c.x, c.y, r, colour);
                 draw_circle(c.x, c.y, r - 6.0, WHITE);
-                draw_label(&format!("{}", i + 1), c, 30.0, colour);
+                draw_level_label(&self.levels[i], c, 30.0, colour);
             }
         }
         // This player's robot sits on the next level to play.
@@ -2111,7 +2129,7 @@ impl Game {
             let r = self.label_rect(strip);
             if strip == 0 {
                 draw_circle(r.center().x, r.center().y, r.w * 0.42, PLAY_GREEN);
-                draw_play_icon(r.center() + vec2(r.w * 0.04, 0.0), r.w * 0.36);
+                draw_play_icon(r.center() + vec2(r.w * 0.04, 0.0), r.w * 0.36, WHITE);
             } else {
                 draw_shape(r.center(), r.w * 0.36, strip);
             }
@@ -2340,7 +2358,7 @@ impl Game {
                             Color::new(0.15, 0.7, 0.25, 0.6 * (1.0 - pulse)),
                         );
                     }
-                    draw_play_icon(c, half)
+                    draw_play_icon(c, half, WHITE)
                 }
                 Button::Undo => draw_undo_icon(c, half),
                 Button::Clear => draw_trash_icon(c, half),
@@ -2364,7 +2382,7 @@ impl Game {
 const ERASER_R: f32 = 14.0;
 
 /// Levels per row on the level map.
-const MAP_COLS: usize = 8;
+const MAP_COLS: usize = 10;
 /// The map's back-to-players button.
 const BACK_BUTTON: Vec2 = vec2(52.0, 44.0);
 
