@@ -128,13 +128,11 @@ pub const LEVELS: &[LevelDef] = &[
     level(&["..@*", "R.#.", "..@."]).with_axe(),
     level(&["R@*", ".@.", "#@.", "..."]).with_axe(),
     level(&["R##.*"]).with_axe(),
-    level(&["R.#.", "@@#@", "*..."]).with_axe(),
     // --- Repeat: not enough slots without it ---
     level(&["R.......*"]).with_repeat(3),
     level(&["R.....", "#####.", "#####.", "#####.", "*....."]).with_repeat(4),
     level(&["R.....", "#####.", "*...#.", "#.###.", "#....."]).with_repeat(6),
     level(&["R..*...*", "#######.", "*......."]).with_repeat(4),
-    level(&["R.......", "#######.", "........", ".#######", "*......."]).with_repeat(5),
     // --- Axe and repeat together ---
     level(&["@@@@@@@@@", "R...#...*", "@@@@@@@@@"])
         .with_axe()
@@ -160,6 +158,9 @@ pub const LEVELS: &[LevelDef] = &[
     ])
     .with_axe()
     .with_repeat(20),
+    // --- More practice with the axe and repeat ---
+    level(&["R.#.", "@@#@", "*..."]).with_axe(),
+    level(&["R.......", "#######.", "........", ".#######", "*......."]).with_repeat(5),
     // --- If: mystery clouds turn into a tree or grass each time you press
     // play, so the robot has to check before it chops ---
     level(&["R?*"]).with_check(),
