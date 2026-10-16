@@ -5,6 +5,7 @@
 #![windows_subsystem = "windows"]
 
 mod level;
+mod progress;
 
 use std::f32::consts::PI;
 
@@ -583,11 +584,13 @@ struct Game {
 impl Game {
     fn new(fullscreen: bool) -> Game {
         let levels = level::all_levels();
-        let solved = vec![false; levels.len()];
-        let world = levels[0].world();
+        let solved = progress::load(levels.len());
+        // Carry on from the first level not finished yet.
+        let idx = solved.iter().position(|&done| !done).unwrap_or(0);
+        let world = levels[idx].world();
         Game {
             levels,
-            idx: 0,
+            idx,
             solved,
             program: Vec::new(),
             armed: None,
@@ -845,6 +848,7 @@ impl Game {
         self.event = None;
         if self.world.stars.is_empty() {
             self.solved[self.idx] = true;
+            progress::save(&self.solved);
             self.set_mode(Mode::Win);
             self.confetti();
             return;
