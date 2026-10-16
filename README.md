@@ -6,7 +6,7 @@ stars. There's no reading required.
 
 **[Play it in your browser](https://plwg.github.io/robot-steps/)**
 
-![The level map: finished levels have a star, and the player's robot waits on the next one](docs/map.png)
+![The level map: finished levels are filled in with a star, and the next one pulses](docs/map.png)
 
 | Choose a player | Playing a level |
 |---|---|
@@ -75,8 +75,9 @@ Every action has a sound, and each direction plays its own note, so a
 program plays a little tune. The speaker in the corner turns the sound off.
 
 Three players each have their own robot colour and their own progress. The
-level map shows each chapter as an island, its levels as numbered tiles
-(starred once finished), and the player's robot waits on the next one.
+level map shows each chapter as an island, and its levels as dots: filled
+in with a star once finished, a play sign for a demo, and the next one to
+play pulsing.
 
 Each win shows how many blocks the program used and how many turns
 (actions) it took, and each player's best for each level is kept from the
