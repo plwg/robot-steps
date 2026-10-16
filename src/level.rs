@@ -724,8 +724,9 @@ pub const CHAPTERS: &[Chapter] = &[
             level("67", &["kR.D*"]),
             // Down the side path for the key, then back up to the door.
             level("key-hunt", &["R..D*", "@@.@@", "@@k@@"]),
-            // Two keys behind, two doors ahead.
-            level("two-keys", &["kkR..DD*"]),
+            // A key behind a tree opens the door to the second key, which
+            // opens the door to the star.
+            level("two-keys", &["R#k@*", "@@D@D", "@@.k."]).with_axe(),
             level("68", &["k@*", ".@D", "R.."]),
             level("69", &["R#D*", ".@@@", "k@@@"]).with_axe(),
             level("71", &["R~~~k", "@@@@D", "*~~~."]),
@@ -1064,9 +1065,10 @@ pub const CHAPTERS: &[Chapter] = &[
             level("rain-5", &["R2.1.3.*"]).with_sleep(3),
             // Two ways round: which one keeps dry?
             level("rain-6", &["R@@@", ".2.*", "@1@."]).with_sleep(3),
-            // Too many clouds to get under before it rains, and no sleep
-            // block: slide along the ice instead, all in one go.
-            level("rain-ice", &["R1111*", "~~~~~."]),
+            // Two ways to the star. Over the top, there are too many clouds
+            // to get under before it rains (and no sleep block); along the
+            // bottom, the ice slides all the way in one go.
+            level("rain-ice", &[".1111.", "R@@@@*", "~~~~~."]),
             // The same sleep each time: a loop.
             level("rain-7", &["R1.1.1.1.*"]).with_sleep(2).with_loops(2),
             level("rain-8", &["R.2.2.2.2*"]).with_sleep(3).with_loops(3),
@@ -2592,6 +2594,20 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn rain_ice_needs_the_ice() {
+        // Over the top, under the clouds, can't be done, even with sleep.
+        let mut level = by_id("rain-ice");
+        for x in 0..level.w {
+            let i = (2 * level.w + x) as usize;
+            if level.tiles[i] == Tile::Ice {
+                level.tiles[i] = Tile::Rock;
+            }
+        }
+        (level.sleep, level.repeat) = (true, true);
+        assert_eq!(fewest_blocks(&level, Allow::level(&level)), None);
     }
 
     #[test]
