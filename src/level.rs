@@ -1087,6 +1087,19 @@ pub const CHAPTERS: &[Chapter] = &[
             level("79", &["@@*@@@@", "@@.@@@*", "@@.@*@.", "R......"])
                 .with_functions(3, 1, 3)
                 .with_numbers(),
+            // Hills of 2, 3 and 1: up a step at a time, then down. The loops
+            // inside the function go round its number of times.
+            level(
+                "fn-hills",
+                &[
+                    "@@@@@@@*.@@@@",
+                    "@@*.@@....@@@",
+                    "@......@@..*.",
+                    "R.@@..@@@@...",
+                ],
+            )
+            .with_functions(3, 1, 4)
+            .with_numbers(),
         ],
     },
     // Rain clouds count down 3, 2, 1, then rain for a bit, and start again.
@@ -1579,6 +1592,8 @@ mod tests {
         // moves right that many times.
         ("78", "f1n3 f1n2 f1n1 | R# D#"),
         ("79", "f1n3 f1n1 f1n2 | R2 U# D#"),
+        // `]#` closes a loop that runs the function's number of times.
+        ("fn-hills", "f1n2 f1n3 f1n1 | [ R U ]# [ R D ]#"),
     ];
 
     /// Known solutions for the "if" levels. `{tR` starts "if there's a tree to
