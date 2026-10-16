@@ -4,6 +4,8 @@ A first coding game for young children (made for a 5-year-old). Tap arrows to
 build a program, press play, and watch the robot follow it to collect the
 stars. There's no reading required.
 
+![The robot checking for a tree inside a loop, on level 40](docs/screenshot.png)
+
 Across 40 levels it introduces:
 
 - **Sequences:** up, down, left and right, in order
