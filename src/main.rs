@@ -2050,7 +2050,7 @@ impl Game {
             self.challenge = !self.challenge;
             return;
         }
-        let near = |i: usize| (m - self.map_node(i)).abs().max_element() <= MAP_TILE * 0.6;
+        let near = |i: usize| (m - self.map_node(i)).length() <= MAP_DOT * 0.7;
         if let Some(i) = (0..self.levels.len()).find(|&i| near(i) && self.playable(i)) {
             self.open_level(i);
         }
@@ -2263,11 +2263,10 @@ impl Game {
             .unwrap_or(i);
         let k = i - first;
         let r = self.island(chapter);
-        let per_row = 5;
-        let step = (r.w - 30.0) / per_row as f32;
+        let step = (r.w - 30.0) / DOTS_PER_ROW as f32;
         vec2(
-            r.x + 15.0 + step * ((k % per_row) as f32 + 0.5),
-            r.y + 70.0 + (k / per_row) as f32 * MAP_TILE * 1.25,
+            r.x + 15.0 + step * ((k % DOTS_PER_ROW) as f32 + 0.5),
+            r.y + 72.0 + (k / DOTS_PER_ROW) as f32 * MAP_DOT * 1.6,
         )
     }
 
@@ -2768,17 +2767,18 @@ impl Game {
                 draw_label(&text, corner, 22.0, darker(colour, 0.7));
             }
         }
-        // The levels: tiles on their island.
+        // The levels: dots on their island, filled in once done. A demo has
+        // a play sign, and the next level to play pulses.
         for i in 0..n {
             let c = self.map_node(i);
             let level = &self.levels[i];
             let colour = self.colour_of(level);
-            let mut half = MAP_TILE / 2.0;
-            if (self.mouse - c).abs().max_element() <= half * 1.2 && self.playable(i) {
-                half += 3.0;
+            let mut r = MAP_DOT / 2.0;
+            if (self.mouse - c).length() <= r * 1.4 && self.playable(i) {
+                r += 2.0;
             }
             if next == Some(i) {
-                half += (self.time * 4.0).sin().abs() * 3.0;
+                r += 1.0 + (self.time * 4.0).sin().abs() * 4.0;
             }
             let done = if self.challenge {
                 self.best.contains_key(&level.key())
@@ -2790,61 +2790,25 @@ impl Game {
             } else {
                 mix(colour, WHITE, 0.6)
             };
-            let s = half * 2.0;
-            rounded_rect(
-                c.x - half,
-                c.y - half + 4.0,
-                s,
-                s,
-                10.0,
-                darker(colour, 0.7),
-            );
-            let label = match level.demo {
-                Some(_) => None,
-                None => Some(level.number.to_string()),
-            };
+            draw_circle(c.x, c.y + 3.0, r, darker(colour, 0.7));
+            draw_circle(c.x, c.y, r, colour);
             let ink = if done {
-                rounded_rect(c.x - half, c.y - half, s, s, 10.0, colour);
                 WHITE
             } else {
-                rounded_rect(c.x - half, c.y - half, s, s, 10.0, colour);
-                rounded_rect(
-                    c.x - half + 4.0,
-                    c.y - half + 4.0,
-                    s - 8.0,
-                    s - 8.0,
-                    7.0,
-                    WHITE,
-                );
+                draw_circle(c.x, c.y, r - 3.5, WHITE);
                 colour
             };
-            match label {
-                Some(text) => draw_label(&text, c, 22.0, ink),
-                None => draw_play_icon(c + vec2(1.0, 0.0), 20.0, ink),
-            }
-            if done && !self.challenge {
-                draw_star(c + vec2(half - 2.0, -half + 2.0), 9.0, 0.0, STAR);
+            if level.demo.is_some() {
+                draw_play_icon(c + vec2(1.0, 0.0), r * 1.0, ink);
+            } else if done && !self.challenge {
+                draw_star(c, r * 0.55, 0.0, STAR);
             }
             // In a challenge, the fewest blocks so far, underneath.
             if self.challenge
                 && let Some((blocks, _)) = self.best.get(&level.key())
             {
-                draw_label(&blocks.to_string(), c + vec2(0.0, half + 10.0), 16.0, INK);
+                draw_label(&blocks.to_string(), c + vec2(0.0, r + 8.0), 14.0, INK);
             }
-        }
-        // This player's robot sits on the next level to play.
-        if let Some(i) = next {
-            let c = self.map_node(i) - vec2(0.0, MAP_TILE * 0.85);
-            let hop = (self.time * 3.0).sin().abs() * 4.0;
-            draw_robot(
-                c - vec2(0.0, hop),
-                38.0,
-                Face::Happy,
-                Vec2::ZERO,
-                self.time,
-                hop,
-                self.paint(),
-            );
         }
         // Challenge mode, once a level is done: a trophy.
         if self.any_done() {
@@ -3711,10 +3675,11 @@ const SOUND_BUTTON: Vec2 = vec2(1334.0, 36.0);
 /// The size of the eraser that appears on a program block under the pointer.
 const ERASER_R: f32 = 14.0;
 
-/// Chapters (islands) per row on the level map, and how big a level's tile
-/// is on it.
+/// Chapters (islands) per row on the level map, how big a level's dot is on
+/// it (across), and how many dots fit in a row.
 const ISLAND_COLS: usize = 5;
-const MAP_TILE: f32 = 36.0;
+const MAP_DOT: f32 = 24.0;
+const DOTS_PER_ROW: usize = 7;
 /// The challenge mode button on the level map.
 const CHALLENGE_BUTTON: Vec2 = vec2(1200.0, 38.0);
 /// The map's back-to-players button.
