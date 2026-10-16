@@ -1555,7 +1555,18 @@ fn start_fullscreen() -> bool {
     !std::env::args().any(|a| a == "--window")
 }
 
+/// WSL hands OpenGL programs a software renderer by default, which is far
+/// too slow for a full-screen game. Mesa's d3d12 driver uses the real GPU.
+fn prefer_gpu_on_wsl() {
+    let on_wsl = std::env::var_os("WSL_DISTRO_NAME").is_some();
+    if on_wsl && std::env::var_os("GALLIUM_DRIVER").is_none() {
+        // SAFETY: runs before the window opens, while there's only one thread.
+        unsafe { std::env::set_var("GALLIUM_DRIVER", "d3d12") };
+    }
+}
+
 fn window_conf() -> Conf {
+    prefer_gpu_on_wsl();
     Conf {
         window_title: "Robot Steps".to_owned(),
         window_width: 1422,
@@ -1563,6 +1574,11 @@ fn window_conf() -> Conf {
         window_resizable: true,
         fullscreen: start_fullscreen(),
         sample_count: 4,
+        platform: miniquad::conf::Platform {
+            // Wait for the screen's refresh (vsync) for steady animation.
+            swap_interval: Some(1),
+            ..Default::default()
+        },
         ..Default::default()
     }
 }
