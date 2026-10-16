@@ -49,7 +49,9 @@ introduces, in the order programming is usually taught:
 14. **Rain:** rain clouds count down 3, 2, 1, rain for a bit, then start
     again. Every action takes a tick, so wait for the rain to pass (the wait
     block, repeated like any other) or hurry across before it starts. Being
-    under a cloud when it rains is getting wet, and the end of the run
+    under a cloud when it rains is getting wet, and the end of the run. Then
+    "wait while it's raining that way", which waits just as long as it
+    takes, with no counting
 15. **All together**
 
 Throughout, a **slider** along the top runs the program ahead of time, while
@@ -76,11 +78,11 @@ Three players each have their own robot colour and their own progress. The
 level map shows each chapter as an island, its levels as numbered tiles
 (starred once finished), and the player's robot waits on the next one.
 
-Once every level is finished, a trophy on the map opens **challenge mode**:
-every level again (not the demos), with every block there is and plenty of
-room. Each player's best for each level is kept: the fewest blocks, and the
-fewest turns (actions while it runs), each on its own. The best blocks show
-under each level on the map. The game draws a big, easy-to-spot pointer.
+Each win shows how many blocks the program used and how many turns
+(actions) it took, and each player's best for each level is kept from the
+first time they finish it: the fewest blocks and the fewest turns, each on
+its own. The trophy on the map shows the finished levels with the best
+blocks under each, to play again and beat. The game draws a big, easy-to-spot pointer.
 
 ## Making maps
 

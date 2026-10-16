@@ -352,6 +352,15 @@ fn draw_rain_cloud(c: Vec2, cell: f32, weather: Weather, time: f32) {
     }
 }
 
+/// "Wait while it's raining that way": an hourglass, a little rain cloud,
+/// and an arrow.
+fn draw_wait_while_icon(c: Vec2, size: f32, dir: Dir) {
+    draw_wait_icon(c - vec2(size * 0.22, 0.0), size * 0.75, WHITE);
+    let cloud = c + vec2(size * 0.18, size * 0.02);
+    draw_rain_cloud(cloud, size * 0.68, Weather::Raining, 0.3);
+    draw_arrow(c + vec2(size * 0.24, size * 0.26), size * 0.32, dir, WHITE);
+}
+
 /// An hourglass: wait a tick.
 fn draw_wait_icon(c: Vec2, size: f32, colour: Color) {
     let (w, h) = (size * 0.32, size * 0.36);
@@ -783,6 +792,8 @@ enum Button {
     Axe,
     /// Wait a tick.
     Wait,
+    /// Wait while it's raining (then pick which way to look).
+    WaitWhile,
     Repeat,
     Loop,
     /// Start an "if" block (then pick what it looks for, and which way), or
@@ -919,15 +930,14 @@ struct Game {
     preview: Vec<bool>,
     /// The slider's knob is being dragged.
     sliding: bool,
-    /// Challenge mode, once every level is done: every block, plenty of
-    /// room, and the player's best kept for each level.
+    /// The trophy map: each finished level with the player's best, to play
+    /// again and beat it.
     challenge: bool,
-    /// This player's best in challenge mode.
+    /// This player's best for each level they've finished: kept from the
+    /// first time.
     best: progress::Best,
-    /// The level being played in challenge mode.
-    challenge_level: Option<Level>,
-    /// How the last challenge win went: blocks and turns, and whether each
-    /// was a new best.
+    /// How the last win went: blocks and turns, and whether each was a new
+    /// best.
     result: Option<(usize, usize, bool, bool)>,
 }
 
@@ -965,7 +975,7 @@ enum Kind {
 
 impl Kind {
     fn of(level: &Level) -> Kind {
-        if level.wait {
+        if level.wait || level.wait_while {
             Kind::Rain
         } else if level.numbers {
             Kind::Number
@@ -1058,7 +1068,6 @@ impl Game {
             sliding: false,
             challenge: false,
             best: progress::Best::new(),
-            challenge_level: None,
             result: None,
         };
         game.load(idx);
@@ -1106,12 +1115,14 @@ impl Game {
         self.open_map();
     }
 
-    /// Has this player finished every level? Then challenge mode opens.
-    fn all_done(&self) -> bool {
-        self.solved.iter().all(|&done| done)
+    /// Has this player finished any level? Then challenge mode opens, for
+    /// the levels they've finished.
+    fn any_done(&self) -> bool {
+        self.solved.iter().any(|&done| done)
     }
 
-    /// A challenge win: keep the player's best blocks and turns.
+    /// A win: keep the player's best blocks and turns. (The first time is
+    /// the best so far, but not a new best: there was nothing to beat.)
     fn record_best(&mut self) {
         let blocks: usize = self.strips.iter().map(|s| tiles(s)).sum();
         let end = (self.pc + 1).min(self.trace.len());
@@ -1121,8 +1132,8 @@ impl Game {
             .count();
         let key = self.levels[self.idx].key();
         let old = self.best.get(&key).copied();
-        let new_blocks = old.is_none_or(|(b, _)| blocks < b);
-        let new_turns = old.is_none_or(|(_, t)| turns < t);
+        let new_blocks = old.is_some_and(|(b, _)| blocks < b);
+        let new_turns = old.is_some_and(|(_, t)| turns < t);
         let (b, t) = old.unwrap_or((blocks, turns));
         self.best.insert(key, (b.min(blocks), t.min(turns)));
         progress::save_best(self.slot, &self.best);
@@ -1131,7 +1142,6 @@ impl Game {
 
     fn open_map(&mut self) {
         self.custom = None;
-        self.challenge_level = None;
         self.particles.clear();
         self.reset_robot();
         self.screen = Screen::Map;
@@ -1156,10 +1166,9 @@ impl Game {
     }
 
     fn level(&self) -> &Level {
-        match (&self.custom, &self.challenge_level) {
-            (Some((level, _)), _) => level,
-            (None, Some(level)) => level,
-            (None, None) => &self.levels[self.idx],
+        match &self.custom {
+            Some((level, _)) => level,
+            None => &self.levels[self.idx],
         }
     }
 
@@ -1167,7 +1176,6 @@ impl Game {
         self.idx = idx;
         self.custom = None;
         self.result = None;
-        self.challenge_level = self.challenge.then(|| self.levels[idx].challenge());
         self.start_level();
     }
 
@@ -1192,8 +1200,7 @@ impl Game {
     /// After a win: on to the next level, or back to the map after the last.
     fn next_level(&mut self) {
         // In a challenge, demos are skipped: there's nothing to beat.
-        let next = (self.idx + 1..self.levels.len())
-            .find(|&i| !self.challenge || self.levels[i].demo.is_none());
+        let next = (self.idx + 1..self.levels.len()).find(|&i| self.playable(i));
         match next {
             _ if self.custom.is_some() => self.leave_level(),
             Some(i) => self.load(i),
@@ -1468,7 +1475,8 @@ impl Game {
     fn check_time(&self) -> f32 {
         match self.trace.get(self.pc).map(|e| e.step) {
             Some(Step::Test {
-                sense: Sense::Wall, ..
+                sense: Sense::Wall | Sense::Rain,
+                ..
             }) => UNTIL_LOOK_TIME,
             _ => CHECK_TIME,
         }
@@ -1630,6 +1638,7 @@ impl Game {
             Button::Loop => self.level().loops,
             Button::If => !self.level().ifs.is_empty(),
             Button::Wait => self.level().wait,
+            Button::WaitWhile => self.level().wait_while,
             Button::Sense(sense) => self.picking() && self.level().ifs.contains(&sense),
             Button::Else => self.level().otherwise,
             Button::Until => self.level().until,
@@ -1642,9 +1651,11 @@ impl Game {
     fn enabled(&self, button: Button) -> bool {
         let editing = self.mode == Mode::Edit;
         match button {
-            Button::Arrow(_) | Button::Axe | Button::Wait | Button::Sense(_) => {
-                editing && self.can_place()
-            }
+            Button::Arrow(_)
+            | Button::Axe
+            | Button::Wait
+            | Button::WaitWhile
+            | Button::Sense(_) => editing && self.can_place(),
             // A loop can hold an "if", but an "if" can't hold a loop.
             Button::Loop => {
                 let open_if = open_if(self.prog()).is_some();
@@ -1698,11 +1709,15 @@ impl Game {
                         self.insert(Item::Until { dir });
                         return;
                     }
+                    Some(Button::WaitWhile) => {
+                        self.insert(Item::WaitWhile { dir });
+                        return;
+                    }
                     _ => Cmd::Move(dir),
                 };
                 self.insert(Item::Block(Block { cmd, times: 1 }));
             }
-            Button::Axe => {
+            Button::Axe | Button::WaitWhile => {
                 self.armed = (self.armed != Some(button)).then_some(button);
             }
             Button::Wait => {
@@ -1897,13 +1912,14 @@ impl Game {
             return;
         }
         if self.world.stars.is_empty() {
-            // Made-up maps don't count towards a player's levels, and a
-            // challenge keeps the player's best instead.
-            if self.challenge_level.is_some() {
-                self.record_best();
-            } else if self.custom.is_none() {
+            // Made-up maps don't count towards a player's levels. Each win
+            // keeps the player's best (demos are just for watching).
+            if self.custom.is_none() {
                 self.solved[self.idx] = true;
                 progress::save(self.slot, &self.keys, &self.solved);
+                if self.level().demo.is_none() {
+                    self.record_best();
+                }
             }
             self.sfx(Sfx::Win);
             self.set_mode(Mode::Win);
@@ -2032,7 +2048,7 @@ impl Game {
             self.open_maps();
             return;
         }
-        if self.all_done() && (m - CHALLENGE_BUTTON).abs().max_element() <= 30.0 {
+        if self.any_done() && (m - CHALLENGE_BUTTON).abs().max_element() <= 30.0 {
             self.sfx(Sfx::Tap);
             self.challenge = !self.challenge;
             return;
@@ -2157,6 +2173,7 @@ impl Game {
         let tools: Vec<Button> = [
             Button::Axe,
             Button::Wait,
+            Button::WaitWhile,
             Button::Repeat,
             Button::Loop,
             Button::Until,
@@ -2257,10 +2274,10 @@ impl Game {
         )
     }
 
-    /// Can level `i` be played? In a challenge, demos can't (there's
-    /// nothing to beat).
+    /// Can level `i` be played? In a challenge, only levels already
+    /// finished, and not demos (there's nothing to beat).
     fn playable(&self, i: usize) -> bool {
-        !self.challenge || self.levels[i].demo.is_none()
+        !self.challenge || (self.solved[i] && self.levels[i].demo.is_none())
     }
 
     /// Where the map goes. Levels with functions have more program strips,
@@ -2559,8 +2576,8 @@ impl Game {
         rounded_rect(c.x - 31.0, c.y - 19.0, 62.0, 38.0, 19.0, colour);
         if self.custom.is_some() {
             maker::draw_pencil_icon(c, 15.0, WHITE);
-        } else if self.challenge_level.is_some() {
-            // A challenge: a trophy, and the best so far.
+        } else if self.challenge {
+            // From the trophy map: a trophy, and the best so far.
             draw_trophy(c, 30.0, STAR);
             let text = match self.best.get(&self.levels[self.idx].key()) {
                 Some((blocks, turns)) => format!("Best: {blocks} blocks, {turns} turns"),
@@ -2749,7 +2766,9 @@ impl Game {
                 });
             // Down in the corner, clear of the name.
             let corner = vec2(r.right() - 34.0, r.bottom() - 24.0);
-            if done == total {
+            if total == 0 {
+                // Nothing here to play yet (on the trophy map).
+            } else if done == total {
                 draw_star(corner, 16.0, 0.0, STAR);
             } else {
                 let text = format!("{done}/{total}");
@@ -2834,8 +2853,8 @@ impl Game {
                 self.paint(),
             );
         }
-        // Challenge mode, once every level is done: a trophy.
-        if self.all_done() {
+        // Challenge mode, once a level is done: a trophy.
+        if self.any_done() {
             let m = CHALLENGE_BUTTON;
             let lit = if self.challenge { STAR } else { PANEL };
             rounded_rect(m.x - 26.0, m.y - 26.0, 52.0, 52.0, 14.0, lit);
@@ -3246,6 +3265,7 @@ impl Game {
             Item::LoopStart { .. } | Item::Until { .. } | Item::LoopEnd => REPEAT_TEAL,
             Item::IfStart { .. } | Item::Else | Item::IfEnd => IF_LIME,
             Item::Call(..) => CALL_INK,
+            Item::WaitWhile { .. } => WAIT_SLATE,
             Item::Gap => SLOT_EMPTY,
         }
     }
@@ -3272,6 +3292,7 @@ impl Game {
             Item::LoopStart { .. } | Item::LoopEnd | Item::Else | Item::IfEnd | Item::Gap => {}
             Item::IfStart { sense, dir } => draw_if_icon(r.center(), r.w, sense, dir),
             Item::Until { dir } => draw_until_icon(r.center(), r.w, dir),
+            Item::WaitWhile { dir } => draw_wait_while_icon(r.center(), r.w, dir),
             Item::Call(f, _) => draw_shape(r.center(), r.w * 0.28, f),
         }
         if let Some(n) = badge {
@@ -3438,6 +3459,7 @@ impl Game {
                 Item::Call(_, n) if self.level().numbers => Some(n),
                 Item::LoopEnd
                 | Item::Until { .. }
+                | Item::WaitWhile { .. }
                 | Item::IfStart { .. }
                 | Item::Else
                 | Item::IfEnd
@@ -3485,7 +3507,7 @@ impl Game {
             let (colour, round) = match button {
                 Button::Arrow(dir) => (dir_color(dir), 18.0),
                 Button::Axe => (AXE_BROWN, 18.0),
-                Button::Wait => (WAIT_SLATE, 18.0),
+                Button::Wait | Button::WaitWhile => (WAIT_SLATE, 18.0),
                 Button::Repeat | Button::Loop => (REPEAT_TEAL, 18.0),
                 Button::If | Button::Sense(_) | Button::Else => (IF_LIME, 18.0),
                 Button::Until => (REPEAT_TEAL, 18.0),
@@ -3535,10 +3557,12 @@ impl Game {
                     Some(Button::Axe) => draw_chop_icon(c, size, dir),
                     Some(Button::Sense(sense)) => draw_if_icon(c, size, sense, dir),
                     Some(Button::Until) => draw_until_icon(c, size, dir),
+                    Some(Button::WaitWhile) => draw_wait_while_icon(c, size, dir),
                     _ => draw_arrow(c, size * 0.8, dir, WHITE),
                 },
                 Button::Axe => draw_axe_badge(c, size * 0.75),
                 Button::Wait => draw_wait_icon(c, size, WHITE),
+                Button::WaitWhile => draw_wait_while_icon(c, size, Dir::Right),
                 Button::Repeat => {
                     draw_loop_icon(c, half, WHITE);
                     // Show what the next tap will make the last block (or loop).
@@ -3608,7 +3632,7 @@ impl Game {
 
     fn draw_next_prompt(&self) {
         let c = self.board().center();
-        // After a challenge: this run's blocks and turns, and any new best.
+        // This run's blocks and turns, and any new best.
         if let Some((blocks, turns, new_blocks, new_turns)) = self.result {
             let card = Rect::new(c.x - 210.0, c.y - 190.0, 420.0, 96.0);
             rounded_rect(card.x, card.y + 5.0, card.w, card.h, 22.0, SHADOW);
@@ -3831,7 +3855,9 @@ fn pair_ends(items: &[Item], i: usize) -> Option<(usize, Option<usize>)> {
         Item::IfStart { .. } | Item::IfEnd => {
             (|it| matches!(it, Item::IfStart { .. }), Item::IfEnd)
         }
-        Item::Block(_) | Item::Call(..) | Item::Else | Item::Gap => return None,
+        Item::Block(_) | Item::Call(..) | Item::Else | Item::WaitWhile { .. } | Item::Gap => {
+            return None;
+        }
     };
     let start = if is_start(&items[i]) {
         i
@@ -3848,6 +3874,7 @@ fn draw_sense(c: Vec2, size: f32, sense: Sense) {
         Sense::Tree => draw_tree(c - vec2(0.0, size * 0.12), size, 1.0, 0.0),
         Sense::Star => draw_star(c, size * 0.42, 0.0, STAR),
         Sense::Rock | Sense::Wall => draw_rock(c - vec2(0.0, size * 0.2), size * 1.1),
+        Sense::Rain => draw_rain_cloud(c + vec2(0.0, size * 0.25), size, Weather::Raining, 0.3),
         Sense::Ice => {
             let s = size * 0.8;
             draw_ice(c.x - s / 2.0, c.y - s / 2.0, s, false);
