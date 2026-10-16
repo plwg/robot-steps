@@ -38,6 +38,8 @@ pub enum Tile {
     Stump,
     /// Blocks the robot for good.
     Rock,
+    /// Unknown until the program runs: becomes a tree or grass at random.
+    Mystery,
 }
 
 /// One instruction.
@@ -45,12 +47,14 @@ pub enum Tile {
 pub enum Cmd {
     Move(Dir),
     Chop(Dir),
+    /// The conditional: if there's a tree that way, chop it; otherwise do nothing.
+    IfTreeChop(Dir),
 }
 
 impl Cmd {
     pub fn dir(self) -> Dir {
         match self {
-            Cmd::Move(d) | Cmd::Chop(d) => d,
+            Cmd::Move(d) | Cmd::Chop(d) | Cmd::IfTreeChop(d) => d,
         }
     }
 }
@@ -63,12 +67,14 @@ pub struct Block {
 }
 
 pub struct LevelDef {
-    /// Legend: `.` grass, `#` tree, `@` rock, `R` robot start, `*` star.
+    /// Legend: `.` grass, `#` tree, `@` rock, `?` mystery (tree or grass),
+    /// `R` robot start, `*` star.
     map: &'static [&'static str],
     /// How many blocks fit in the program for this level.
     slots: usize,
     chop: bool,
     repeat: bool,
+    check: bool,
 }
 
 const fn level(map: &'static [&'static str]) -> LevelDef {
@@ -77,6 +83,7 @@ const fn level(map: &'static [&'static str]) -> LevelDef {
         slots: MAX_PROGRAM,
         chop: false,
         repeat: false,
+        check: false,
     }
 }
 
@@ -91,6 +98,13 @@ impl LevelDef {
     const fn with_repeat(mut self, slots: usize) -> Self {
         self.repeat = true;
         self.slots = slots;
+        self
+    }
+
+    /// Unlock the "if tree, chop" block (and the axe).
+    const fn with_check(mut self) -> Self {
+        self.chop = true;
+        self.check = true;
         self
     }
 }
@@ -114,11 +128,13 @@ pub const LEVELS: &[LevelDef] = &[
     level(&["..@*", "R.#.", "..@."]).with_axe(),
     level(&["R@*", ".@.", "#@.", "..."]).with_axe(),
     level(&["R##.*"]).with_axe(),
+    level(&["R.#.", "@@#@", "*..."]).with_axe(),
     // --- Repeat: not enough slots without it ---
     level(&["R.......*"]).with_repeat(3),
     level(&["R.....", "#####.", "#####.", "#####.", "*....."]).with_repeat(4),
     level(&["R.....", "#####.", "*...#.", "#.###.", "#....."]).with_repeat(6),
     level(&["R..*...*", "#######.", "*......."]).with_repeat(4),
+    level(&["R.......", "#######.", "........", ".#######", "*......."]).with_repeat(5),
     // --- Axe and repeat together ---
     level(&["@@@@@@@@@", "R...#...*", "@@@@@@@@@"])
         .with_axe()
@@ -144,6 +160,19 @@ pub const LEVELS: &[LevelDef] = &[
     ])
     .with_axe()
     .with_repeat(20),
+    // --- If: mystery clouds turn into a tree or grass each time you press
+    // play, so the robot has to check before it chops ---
+    level(&["R?*"]).with_check(),
+    level(&["R.?.*"]).with_check(),
+    level(&["R?@", "@.@", "@?*"]).with_check(),
+    level(&["@@@@@@", "R?.?.*", "@@@@@@"]).with_check(),
+    level(&["*?.R.?*"]).with_check(),
+    level(&["R.?.@*", "@@.@@?", "*?...."]).with_check(),
+    // --- If and repeat together ---
+    level(&["R...?...*"]).with_check().with_repeat(3),
+    level(&["R..?..#..", "@@@@@@@@.", "*..?..?.."])
+        .with_check()
+        .with_repeat(14),
 ];
 
 pub struct Level {
@@ -155,6 +184,9 @@ pub struct Level {
     pub slots: usize,
     pub chop: bool,
     pub repeat: bool,
+    pub check: bool,
+    /// Where the mystery clouds are.
+    pub mysteries: Vec<Pos>,
 }
 
 impl Level {
@@ -165,6 +197,7 @@ impl Level {
         let mut tiles = Vec::new();
         let mut start = None;
         let mut stars = Vec::new();
+        let mut mysteries = Vec::new();
         for (y, row) in rows.iter().enumerate() {
             assert_eq!(row.len() as i32, w, "level rows must be the same length");
             for (x, ch) in row.chars().enumerate() {
@@ -172,11 +205,13 @@ impl Level {
                 tiles.push(match ch {
                     '#' => Tile::Tree,
                     '@' => Tile::Rock,
+                    '?' => Tile::Mystery,
                     _ => Tile::Grass,
                 });
                 match ch {
                     'R' => start = Some(p),
                     '*' => stars.push(p),
+                    '?' => mysteries.push(p),
                     '.' | '#' | '@' => {}
                     other => panic!("unknown level tile {other:?}"),
                 }
@@ -191,10 +226,12 @@ impl Level {
             slots: def.slots,
             chop: def.chop,
             repeat: def.repeat,
+            check: def.check,
+            mysteries,
         }
     }
 
-    /// A fresh copy of the world, ready for the program to run.
+    /// The level as drawn while building the program, mysteries unrevealed.
     pub fn world(&self) -> World {
         World {
             w: self.w,
@@ -204,13 +241,42 @@ impl Level {
             stars: self.stars.clone(),
         }
     }
+
+    /// Every way the mysteries can turn out (`true` = tree). With two or more
+    /// there's always at least one tree and one patch of grass, so a program
+    /// that guesses instead of checking can't get lucky every time.
+    pub fn outcomes(&self) -> Vec<Vec<bool>> {
+        let n = self.mysteries.len();
+        let all = (1u32 << n) - 1;
+        (0..=all)
+            .filter(|&bits| n < 2 || (bits != 0 && bits != all))
+            .map(|bits| (0..n).map(|i| bits & (1 << i) != 0).collect())
+            .collect()
+    }
+
+    /// A world ready for the program to run, with each mystery revealed.
+    pub fn revealed(&self, trees: &[bool]) -> World {
+        let mut world = self.world();
+        for (&(x, y), &tree) in self.mysteries.iter().zip(trees) {
+            world.tiles[(y * self.w + x) as usize] = if tree { Tile::Tree } else { Tile::Grass };
+        }
+        world
+    }
 }
 
 /// What happened when the robot did one instruction.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum Event {
-    Moved { from: Pos, star: bool },
+    Moved {
+        from: Pos,
+        star: bool,
+    },
     Chopped(Pos),
+    /// Looked at `at` for a tree (and chopped it if there was one).
+    Checked {
+        at: Pos,
+        tree: bool,
+    },
 }
 
 /// The changing state of a level while a program runs.
@@ -252,6 +318,13 @@ impl World {
                 self.tiles[(next.1 * self.w + next.0) as usize] = Tile::Stump;
                 Ok(Event::Chopped(next))
             }
+            (Cmd::IfTreeChop(_), tile) => {
+                let tree = tile == Some(Tile::Tree);
+                if tree {
+                    self.tiles[(next.1 * self.w + next.0) as usize] = Tile::Stump;
+                }
+                Ok(Event::Checked { at: next, tree })
+            }
             _ => Err(()),
         }
     }
@@ -266,26 +339,59 @@ mod tests {
     use super::*;
     use std::collections::{HashSet, VecDeque};
 
-    /// Fewest blocks needed to collect every star (breadth-first search over
-    /// every block the level allows).
-    fn fewest_blocks(level: &Level, allow_repeat: bool) -> Option<usize> {
+    struct Allow {
+        repeat: bool,
+        chop: bool,
+        check: bool,
+    }
+
+    impl Allow {
+        fn level(level: &Level) -> Allow {
+            Allow {
+                repeat: level.repeat,
+                chop: level.chop,
+                check: level.check,
+            }
+        }
+    }
+
+    /// Fewest blocks in a single program that collects every star however the
+    /// mysteries turn out (breadth-first search over every block allowed).
+    fn fewest_blocks(level: &Level, allow: Allow) -> Option<usize> {
         let mut cmds: Vec<Cmd> = Dir::ALL.map(Cmd::Move).to_vec();
-        if level.chop {
+        if allow.chop {
             cmds.extend(Dir::ALL.map(Cmd::Chop));
         }
-        let max_times = if allow_repeat { MAX_TIMES } else { 1 };
+        if allow.check {
+            cmds.extend(Dir::ALL.map(Cmd::IfTreeChop));
+        }
+        let max_times = if allow.repeat { MAX_TIMES } else { 1 };
 
-        let start = level.world();
+        // One world per outcome, run in lockstep. `None` means that world is
+        // already won (the game stops as soon as the last star is collected).
+        type Worlds = Vec<Option<World>>;
+        let start: Worlds = level
+            .outcomes()
+            .iter()
+            .map(|o| Some(level.revealed(o)))
+            .collect();
         let mut seen = HashSet::from([start.clone()]);
         let mut queue = VecDeque::from([(start, 0)]);
-        while let Some((world, blocks)) = queue.pop_front() {
+        while let Some((worlds, blocks)) = queue.pop_front() {
             for &cmd in &cmds {
-                let mut next = world.clone();
-                for _ in 0..max_times {
-                    if next.act(cmd).is_err() {
-                        break;
+                let mut next = worlds.clone();
+                'reps: for _ in 0..max_times {
+                    for slot in next.iter_mut() {
+                        if let Some(world) = slot {
+                            if world.act(cmd).is_err() {
+                                break 'reps;
+                            }
+                            if world.stars.is_empty() {
+                                *slot = None;
+                            }
+                        }
                     }
-                    if next.stars.is_empty() {
+                    if next.iter().all(Option::is_none) {
                         return Some(blocks + 1);
                     }
                     if seen.insert(next.clone()) {
@@ -303,7 +409,12 @@ mod tests {
             let n = i + 1;
             assert!(!level.stars.is_empty(), "level {n} has no stars");
             assert!(level.slots <= MAX_PROGRAM, "level {n} has too many slots");
-            let blocks = fewest_blocks(level, level.repeat)
+            assert_eq!(
+                level.check,
+                !level.mysteries.is_empty(),
+                "level {n}: mysteries and the check block go together"
+            );
+            let blocks = fewest_blocks(level, Allow::level(level))
                 .unwrap_or_else(|| panic!("level {n} cannot be solved"));
             println!("level {n}: {blocks} blocks, {} slots", level.slots);
             assert!(blocks <= level.slots, "level {n} needs {blocks} blocks");
@@ -314,7 +425,11 @@ mod tests {
     fn repeat_levels_need_repeat() {
         for (i, level) in all_levels().iter().enumerate() {
             if level.repeat {
-                let without = fewest_blocks(level, false).unwrap_or(usize::MAX);
+                let allow = Allow {
+                    repeat: false,
+                    ..Allow::level(level)
+                };
+                let without = fewest_blocks(level, allow).unwrap_or(usize::MAX);
                 assert!(
                     without > level.slots,
                     "level {} fits in {without} blocks without repeat",
@@ -326,12 +441,14 @@ mod tests {
 
     #[test]
     fn axe_levels_need_the_axe() {
-        for (i, def) in LEVELS.iter().enumerate() {
-            if def.chop {
-                let mut level = Level::parse(def);
-                level.chop = false;
+        for (i, level) in all_levels().iter().enumerate() {
+            if level.chop && !level.check {
+                let allow = Allow {
+                    chop: false,
+                    ..Allow::level(level)
+                };
                 assert_eq!(
-                    fewest_blocks(&level, true),
+                    fewest_blocks(level, allow),
                     None,
                     "level {} can be done without the axe",
                     i + 1
@@ -341,12 +458,52 @@ mod tests {
     }
 
     #[test]
-    fn robot_bumps_and_chops() {
+    fn check_levels_need_the_check() {
+        for (i, level) in all_levels().iter().enumerate() {
+            if level.check {
+                let allow = Allow {
+                    check: false,
+                    ..Allow::level(level)
+                };
+                assert_eq!(
+                    fewest_blocks(level, allow),
+                    None,
+                    "level {} can be done without checking",
+                    i + 1
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn mysteries_always_include_a_tree_and_grass() {
+        let pair = Level::parse(&level(&["R??"]).with_check());
+        assert_eq!(pair.outcomes().len(), 2);
+        let single = Level::parse(&level(&["R?"]).with_check());
+        assert_eq!(single.outcomes(), vec![vec![false], vec![true]]);
+    }
+
+    #[test]
+    fn robot_bumps_chops_and_checks() {
         let mut world = Level::parse(&level(&["R#", ".@"])).world();
         assert!(world.act(Cmd::Move(Dir::Right)).is_err());
         assert!(world.act(Cmd::Move(Dir::Up)).is_err());
         assert!(world.act(Cmd::Chop(Dir::Down)).is_err(), "can't chop grass");
-        assert_eq!(world.act(Cmd::Chop(Dir::Right)), Ok(Event::Chopped((1, 0))));
+        assert_eq!(
+            world.act(Cmd::IfTreeChop(Dir::Down)),
+            Ok(Event::Checked {
+                at: (0, 1),
+                tree: false
+            }),
+            "checking grass is fine"
+        );
+        assert_eq!(
+            world.act(Cmd::IfTreeChop(Dir::Right)),
+            Ok(Event::Checked {
+                at: (1, 0),
+                tree: true
+            })
+        );
         assert!(
             world.act(Cmd::Move(Dir::Right)).is_ok(),
             "stumps are passable"

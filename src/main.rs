@@ -17,6 +17,8 @@ const STEP_TIME: f32 = 0.45;
 const CHOP_TIME: f32 = 0.7;
 const BUMP_TIME: f32 = 0.8;
 const SAD_TIME: f32 = 1.4;
+const CHECK_TIME: f32 = 0.7;
+const REVEAL_TIME: f32 = 0.8;
 
 const BOARD: Rect = Rect {
     x: 20.0,
@@ -45,6 +47,8 @@ const STOP_RED: Color = Color::new(0.9, 0.25, 0.25, 1.0);
 const UNDO_YELLOW: Color = Color::new(0.95, 0.7, 0.1, 1.0);
 const AXE_BROWN: Color = Color::new(0.62, 0.4, 0.22, 1.0);
 const REPEAT_TEAL: Color = Color::new(0.1, 0.65, 0.65, 1.0);
+const CHECK_SLATE: Color = Color::new(0.33, 0.36, 0.55, 1.0);
+const CLOUD: Color = Color::new(0.97, 0.97, 1.0, 1.0);
 const WOOD: Color = Color::new(0.55, 0.35, 0.2, 1.0);
 const LEAF: Color = Color::new(0.16, 0.55, 0.22, 1.0);
 
@@ -121,6 +125,14 @@ fn draw_label(text: &str, centre: Vec2, size: f32, color: Color) {
             ..Default::default()
         },
     );
+}
+
+/// A big question mark, drawn a few times over itself to make it bold.
+fn draw_question(centre: Vec2, size: f32, color: Color) {
+    let k = size * 0.035;
+    for (dx, dy) in [(-k, 0.0), (k, 0.0), (0.0, -k), (0.0, k)] {
+        draw_label("?", centre + vec2(dx, dy), size, color);
+    }
 }
 
 /// A chunky arrow pointing in `dir`, sized to fit a box of `size`.
@@ -230,6 +242,39 @@ fn draw_rock(c: Vec2, cell: f32) {
         s * 0.08,
         darker(grey, 1.25),
     );
+}
+
+/// A puffy cloud with a question mark: a tree or grass, nobody knows yet.
+fn draw_mystery(c: Vec2, cell: f32, scale: f32, time: f32) {
+    let s = cell * scale;
+    let c = c + vec2(0.0, (time * 2.5).sin() * cell * 0.03);
+    draw_ellipse(c.x, c.y + cell * 0.36, s * 0.3, s * 0.07, 0.0, SHADOW);
+    let shade = darker(CLOUD, 0.88);
+    for (dx, dy, r) in [(-0.2, 0.06, 0.17), (0.2, 0.06, 0.17), (0.0, 0.1, 0.2)] {
+        draw_circle(c.x + dx * s, c.y + dy * s + s * 0.03, r * s, shade);
+    }
+    for (dx, dy, r) in [
+        (-0.2, 0.04, 0.17),
+        (0.2, 0.04, 0.17),
+        (-0.08, -0.1, 0.2),
+        (0.1, -0.08, 0.19),
+        (0.0, 0.08, 0.2),
+    ] {
+        draw_circle(c.x + dx * s, c.y + dy * s, r * s, CLOUD);
+    }
+    if scale > 0.3 {
+        draw_question(c, 64.0 * s / MAX_CELL, CHECK_SLATE);
+    }
+}
+
+/// A thought bubble with a question mark, for when the robot is checking.
+fn draw_thought(robot: Vec2, cell: f32) {
+    let s = cell;
+    let bubble = robot + vec2(s * 0.42, -s * 0.62);
+    draw_circle(robot.x + s * 0.2, robot.y - s * 0.32, s * 0.04, WHITE);
+    draw_circle(robot.x + s * 0.28, robot.y - s * 0.42, s * 0.06, WHITE);
+    draw_circle(bubble.x, bubble.y, s * 0.2, WHITE);
+    draw_question(bubble, 44.0 * s / MAX_CELL, CHECK_SLATE);
 }
 
 /// An axe with its blade facing `dir`; `swing` tilts it (radians).
@@ -440,6 +485,7 @@ fn draw_fullscreen_icon(c: Vec2, r: f32, color: Color) {
 enum Button {
     Arrow(Dir),
     Axe,
+    Check,
     Repeat,
     Play,
     Undo,
@@ -447,14 +493,13 @@ enum Button {
     Fullscreen,
 }
 
-/// Each button with its centre and half-size.
-const BUTTONS: [(Button, Vec2, f32); 10] = [
+/// Each fixed button with its centre and half-size. The tool buttons (axe,
+/// check, repeat) are laid out per level, as only some levels have them.
+const BUTTONS: [(Button, Vec2, f32); 8] = [
     (Button::Arrow(Dir::Up), vec2(1256.0, 130.0), 42.0),
     (Button::Arrow(Dir::Left), vec2(1166.0, 215.0), 42.0),
     (Button::Arrow(Dir::Right), vec2(1346.0, 215.0), 42.0),
     (Button::Arrow(Dir::Down), vec2(1256.0, 300.0), 42.0),
-    (Button::Axe, vec2(1186.0, 412.0), 42.0),
-    (Button::Repeat, vec2(1326.0, 412.0), 42.0),
     (Button::Play, vec2(1256.0, 572.0), 64.0),
     (Button::Undo, vec2(1186.0, 728.0), 40.0),
     (Button::Clear, vec2(1326.0, 728.0), 40.0),
@@ -469,6 +514,10 @@ const BUTTONS: [(Button, Vec2, f32); 10] = [
 enum Mode {
     /// Building the program.
     Edit,
+    /// Play was pressed: the mystery clouds turn into trees or grass.
+    Reveal,
+    /// Looking to see if there's a tree.
+    Checking,
     /// Walking one step.
     Moving,
     /// Chopping down a tree.
@@ -496,8 +545,8 @@ struct Game {
     idx: usize,
     solved: Vec<bool>,
     program: Vec<Block>,
-    /// The axe was tapped; the next arrow makes a chop block.
-    axe_armed: bool,
+    /// The axe or check button was tapped; the next arrow makes that block.
+    armed: Option<Button>,
     world: World,
     mode: Mode,
     timer: f32,
@@ -524,7 +573,7 @@ impl Game {
             idx: 0,
             solved,
             program: Vec::new(),
-            axe_armed: false,
+            armed: None,
             world,
             mode: Mode::Edit,
             timer: 0.0,
@@ -548,7 +597,7 @@ impl Game {
         self.idx = idx;
         self.program.clear();
         self.particles.clear();
-        self.axe_armed = false;
+        self.armed = None;
         self.failed_step = None;
         self.reset_robot();
     }
@@ -574,7 +623,7 @@ impl Game {
     fn running(&self) -> bool {
         matches!(
             self.mode,
-            Mode::Moving | Mode::Chopping | Mode::Bump | Mode::Sad
+            Mode::Reveal | Mode::Moving | Mode::Checking | Mode::Chopping | Mode::Bump | Mode::Sad
         )
     }
 
@@ -585,6 +634,7 @@ impl Game {
     fn visible(&self, button: Button) -> bool {
         match button {
             Button::Axe => self.level().chop,
+            Button::Check => self.level().check,
             Button::Repeat => self.level().repeat,
             _ => true,
         }
@@ -593,9 +643,9 @@ impl Game {
     fn enabled(&self, button: Button) -> bool {
         let editing = self.mode == Mode::Edit;
         match button {
-            Button::Arrow(_) | Button::Axe => editing && self.has_room(),
+            Button::Arrow(_) | Button::Axe | Button::Check => editing && self.has_room(),
             Button::Repeat | Button::Clear => editing && !self.program.is_empty(),
-            Button::Undo => editing && (self.axe_armed || !self.program.is_empty()),
+            Button::Undo => editing && (self.armed.is_some() || !self.program.is_empty()),
             Button::Play => self.running() || (editing && !self.program.is_empty()),
             Button::Fullscreen => true,
         }
@@ -611,39 +661,57 @@ impl Game {
         }
         match button {
             Button::Arrow(dir) => {
-                let cmd = if self.axe_armed {
-                    Cmd::Chop(dir)
-                } else {
-                    Cmd::Move(dir)
+                let cmd = match self.armed.take() {
+                    Some(Button::Axe) => Cmd::Chop(dir),
+                    Some(Button::Check) => Cmd::IfTreeChop(dir),
+                    _ => Cmd::Move(dir),
                 };
                 self.program.push(Block { cmd, times: 1 });
-                self.axe_armed = false;
             }
-            Button::Axe => self.axe_armed = !self.axe_armed,
+            Button::Axe | Button::Check => {
+                self.armed = (self.armed != Some(button)).then_some(button);
+            }
             Button::Repeat => {
                 if let Some(last) = self.program.last_mut() {
                     last.times = last.times % MAX_TIMES + 1;
                 }
             }
-            Button::Undo if self.axe_armed => self.axe_armed = false,
+            Button::Undo if self.armed.is_some() => self.armed = None,
             Button::Undo => {
                 self.program.pop();
             }
             Button::Clear => {
                 self.program.clear();
-                self.axe_armed = false;
+                self.armed = None;
             }
             Button::Play if self.running() => self.reset_robot(),
             Button::Play => {
-                self.axe_armed = false;
+                self.armed = None;
                 self.reset_robot();
-                self.act();
+                self.start_run();
             }
             Button::Fullscreen => {
                 self.fullscreen = !self.fullscreen;
                 set_fullscreen(self.fullscreen);
             }
         }
+    }
+
+    /// Reveal what's under the mystery clouds (different every time), then go.
+    fn start_run(&mut self) {
+        let mysteries = self.level().mysteries.clone();
+        if mysteries.is_empty() {
+            self.act();
+            return;
+        }
+        let outcomes = self.level().outcomes();
+        let outcome = &outcomes[gen_range(0, outcomes.len())];
+        self.world = self.level().revealed(outcome);
+        for p in mysteries {
+            let (c, cell) = self.cell_centre(p);
+            self.burst(c, cell, CLOUD, false);
+        }
+        self.set_mode(Mode::Reveal);
     }
 
     /// Start the current repetition of the current block.
@@ -660,6 +728,7 @@ impl Game {
                 self.set_mode(match event {
                     Event::Moved { .. } => Mode::Moving,
                     Event::Chopped(_) => Mode::Chopping,
+                    Event::Checked { .. } => Mode::Checking,
                 });
             }
             Err(()) => {
@@ -671,6 +740,12 @@ impl Game {
 
     /// The current action has finished: celebrate, or carry on with the program.
     fn finish_action(&mut self) {
+        // Checked and found a tree: now chop it down.
+        if let Some(Event::Checked { at, tree: true }) = self.event {
+            self.event = Some(Event::Chopped(at));
+            self.set_mode(Mode::Chopping);
+            return;
+        }
         match self.event {
             Some(Event::Moved { star: true, .. }) => {
                 let (c, cell) = self.cell_centre(self.world.pos);
@@ -701,7 +776,9 @@ impl Game {
         self.time += dt;
         self.timer += dt;
         match self.mode {
+            Mode::Reveal if self.timer >= REVEAL_TIME => self.act(),
             Mode::Moving if self.timer >= STEP_TIME => self.finish_action(),
+            Mode::Checking if self.timer >= CHECK_TIME => self.finish_action(),
             Mode::Chopping if self.timer >= CHOP_TIME => self.finish_action(),
             Mode::Bump if self.timer >= BUMP_TIME => self.set_mode(Mode::Sad),
             Mode::Sad if self.timer >= SAD_TIME => self.reset_robot(),
@@ -720,7 +797,7 @@ impl Game {
     }
 
     fn handle_click(&mut self, m: Vec2) {
-        for (button, centre, half) in BUTTONS {
+        for (button, centre, half) in self.buttons() {
             if self.visible(button) && (m - centre).abs().max_element() <= half {
                 if self.mode == Mode::Win && button != Button::Fullscreen {
                     break;
@@ -744,7 +821,7 @@ impl Game {
             return;
         }
         // Tap a level dot to jump there.
-        if let Some(i) = (0..self.levels.len()).find(|&i| (m - level_dot(i)).length() < 20.0) {
+        if let Some(i) = (0..self.levels.len()).find(|&i| (m - self.level_dot(i)).length() < 20.0) {
             self.load(i);
         }
     }
@@ -769,6 +846,7 @@ impl Game {
             (KeyCode::Left, Button::Arrow(Dir::Left)),
             (KeyCode::Right, Button::Arrow(Dir::Right)),
             (KeyCode::C, Button::Axe),
+            (KeyCode::Q, Button::Check),
             (KeyCode::R, Button::Repeat),
             (KeyCode::Space, Button::Play),
             (KeyCode::Enter, Button::Play),
@@ -792,6 +870,25 @@ impl Game {
     }
 
     // --- geometry -------------------------------------------------------
+
+    /// Every button for this level, with its centre and half-size.
+    fn buttons(&self) -> Vec<(Button, Vec2, f32)> {
+        let tools: Vec<Button> = [Button::Axe, Button::Check, Button::Repeat]
+            .into_iter()
+            .filter(|&b| self.visible(b))
+            .collect();
+        let middle = (tools.len() as f32 - 1.0) / 2.0;
+        let tool_buttons = tools
+            .into_iter()
+            .enumerate()
+            .map(|(i, b)| (b, vec2(1256.0 + (i as f32 - middle) * 92.0, 412.0), 40.0));
+        BUTTONS.into_iter().chain(tool_buttons).collect()
+    }
+
+    fn level_dot(&self, i: usize) -> Vec2 {
+        let spacing = (1270.0 / (self.levels.len() - 1) as f32).min(52.0);
+        vec2(40.0 + i as f32 * spacing, 36.0)
+    }
 
     fn cell_size(&self) -> f32 {
         let l = self.level();
@@ -893,7 +990,7 @@ impl Game {
 
     fn draw_level_dots(&self) {
         for i in 0..self.levels.len() {
-            let c = level_dot(i);
+            let c = self.level_dot(i);
             if i == self.idx {
                 draw_circle(c.x, c.y, 22.0, WHITE);
                 draw_circle(c.x, c.y, 19.0, dir_color(Dir::Up));
@@ -946,6 +1043,11 @@ impl Game {
             (Mode::Chopping, Some(Event::Chopped(p))) => Some(p),
             _ => None,
         };
+        // The tree being looked at is still standing until the chop starts.
+        let checked_tree = match (self.mode, self.event) {
+            (Mode::Checking, Some(Event::Checked { at, tree: true })) => Some(at),
+            _ => None,
+        };
         for y in 0..l.h {
             for x in 0..l.w {
                 let c = self.cell_centre((x, y)).0;
@@ -964,10 +1066,27 @@ impl Game {
                             draw_tree(c, cell, 1.0 - fall, side * fall * 1.2);
                         }
                     }
+                    Some(Tile::Stump) if checked_tree == Some((x, y)) => {
+                        draw_tree(c, cell, 1.0, 0.0)
+                    }
                     Some(Tile::Stump) => draw_stump(c, cell),
+                    Some(Tile::Mystery) => draw_mystery(c, cell, 1.0, self.time),
                     _ => {}
                 }
             }
+        }
+        // The clouds shrink away as Play reveals what was underneath.
+        if self.mode == Mode::Reveal {
+            let t = (self.timer / (REVEAL_TIME * 0.6)).min(1.0);
+            for &p in &l.mysteries {
+                draw_mystery(self.cell_centre(p).0, cell, 1.0 - t, self.time);
+            }
+        }
+        // While checking, a ring shows where the robot is looking.
+        if let (Mode::Checking, Some(Event::Checked { at, .. })) = (self.mode, self.event) {
+            let c = self.cell_centre(at).0;
+            let pulse = (self.time * 8.0).sin() * 0.5 + 0.5;
+            draw_circle_lines(c.x, c.y, cell * (0.42 + pulse * 0.04), 5.0, WHITE);
         }
 
         // Stars bob gently; leftover stars wiggle when the robot is sad.
@@ -1002,6 +1121,7 @@ impl Game {
                 (pos_vec(from).lerp(pos, eased), hop, Face::Happy)
             }
             (Mode::Chopping, _) => (pos, 0.0, Face::Happy),
+            (Mode::Checking, _) => (pos, 0.0, Face::Calm),
             (Mode::Bump, _) => {
                 let t = self.timer / BUMP_TIME;
                 let lunge = (t * 3.0).min(1.0) * PI;
@@ -1021,6 +1141,9 @@ impl Game {
         };
         let c = self.cell_centre_f(at) - vec2(0.0, lift);
         draw_robot(c, cell, face, look, self.time, lift);
+        if self.mode == Mode::Checking {
+            draw_thought(c, cell);
+        }
 
         // Swing the axe while chopping (or while trying to chop something
         // that isn't a tree).
@@ -1045,6 +1168,7 @@ impl Game {
         match cmd {
             Cmd::Move(dir) => dir_color(dir),
             Cmd::Chop(_) => AXE_BROWN,
+            Cmd::IfTreeChop(_) => CHECK_SLATE,
         }
     }
 
@@ -1054,6 +1178,7 @@ impl Game {
         match block.cmd {
             Cmd::Move(dir) => draw_arrow(r.center(), r.w * 0.8, dir, WHITE),
             Cmd::Chop(dir) => draw_chop_icon(r.center(), r.w, dir),
+            Cmd::IfTreeChop(dir) => draw_check_icon(r.center(), r.w, dir),
         }
         if let Some(n) = badge {
             let c = vec2(r.x + r.w - 4.0, r.y + 4.0);
@@ -1076,7 +1201,10 @@ impl Game {
             20.0,
             PANEL,
         );
-        let running = matches!(self.mode, Mode::Moving | Mode::Chopping | Mode::Bump);
+        let running = matches!(
+            self.mode,
+            Mode::Moving | Mode::Checking | Mode::Chopping | Mode::Bump
+        );
         for i in 0..slots {
             let mut r = self.slot_rect(i);
             let Some(&block) = self.program.get(i) else {
@@ -1115,7 +1243,7 @@ impl Game {
         let tools = self.level().chop || self.level().repeat;
         let panel_h = if tools { 400.0 } else { 300.0 };
         rounded_rect(1110.0, 70.0, 292.0, panel_h, 30.0, PANEL);
-        for (button, c, half) in BUTTONS {
+        for (button, c, half) in self.buttons() {
             if !self.visible(button) {
                 continue;
             }
@@ -1128,6 +1256,7 @@ impl Game {
             let (colour, round) = match button {
                 Button::Arrow(dir) => (dir_color(dir), 18.0),
                 Button::Axe => (AXE_BROWN, 18.0),
+                Button::Check => (CHECK_SLATE, 18.0),
                 Button::Repeat => (REPEAT_TEAL, 18.0),
                 Button::Play if self.running() => (STOP_RED, half),
                 Button::Play => (PLAY_GREEN, half),
@@ -1137,8 +1266,8 @@ impl Game {
             };
             let colour = if enabled { colour } else { DISABLED };
             let size = half * 2.0;
-            // The armed axe glows to say "now pick which way to chop".
-            if button == Button::Axe && self.axe_armed {
+            // An armed tool glows to say "now pick which way".
+            if self.armed == Some(button) {
                 let g = 6.0 + ((self.time * 6.0).sin() * 0.5 + 0.5) * 4.0;
                 rounded_rect(
                     c.x - half - g,
@@ -1161,9 +1290,16 @@ impl Game {
             }
             rounded_rect(c.x - half, c.y - half, size, size, round, colour);
             match button {
-                Button::Arrow(dir) if self.axe_armed => draw_chop_icon(c, size, dir),
-                Button::Arrow(dir) => draw_arrow(c, size * 0.8, dir, WHITE),
+                Button::Arrow(dir) => match self.armed {
+                    Some(Button::Axe) => draw_chop_icon(c, size, dir),
+                    Some(Button::Check) => draw_check_icon(c, size, dir),
+                    _ => draw_arrow(c, size * 0.8, dir, WHITE),
+                },
                 Button::Axe => draw_axe_badge(c, size * 0.75),
+                Button::Check => {
+                    draw_question(c - vec2(size * 0.14, size * 0.04), 64.0, WHITE);
+                    draw_axe_badge(c + vec2(0.2, 0.18) * size, size * 0.42);
+                }
                 Button::Repeat => {
                     draw_loop_icon(c, half, WHITE);
                     // Show what the next tap will make the last block.
@@ -1210,13 +1346,15 @@ fn draw_chop_icon(c: Vec2, size: f32, dir: Dir) {
     draw_axe_badge(c - vec2(0.24, 0.24) * size, size * 0.42);
 }
 
+/// "If there's a tree that way, chop it": an arrow with a question mark.
+fn draw_check_icon(c: Vec2, size: f32, dir: Dir) {
+    draw_arrow(c + vec2(0.08, 0.08) * size, size * 0.62, dir, WHITE);
+    draw_question(c - vec2(0.22, 0.2) * size, size * 0.62, WHITE);
+}
+
 /// The axe as drawn on the axe button, for use as a small badge.
 fn draw_axe_badge(c: Vec2, size: f32) {
     draw_axe(c, size, Dir::Left, -0.5, WHITE);
-}
-
-fn level_dot(i: usize) -> Vec2 {
-    vec2(40.0 + i as f32 * 52.0, 36.0)
 }
 
 /// A camera that maps the fixed W x H canvas onto the window, letterboxed.
