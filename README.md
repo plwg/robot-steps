@@ -49,8 +49,8 @@ introduces, in the order programming is usually taught:
     inside it a count can be "●'s number" instead of a fixed one, so one
     function makes stairs of 1, 2 and 3
 15. **Rain:** rain clouds count down 3, 2, 1, rain for a bit, then start
-    again. Every action takes a tick, so wait for the rain to pass (the wait
-    block, repeated like any other) or hurry across before it starts. Being
+    again. Every action takes a tick, so sleep while it rains (the sleep
+    block, Zzz, repeated like any other) or hurry across before it starts. Being
     under a cloud when it rains is getting wet, and the end of the run
 16. **All together**
 
@@ -93,12 +93,12 @@ mystery cloud, key, door, rain cloud, star or the robot) and tap or drag
 across the map to paint it. Tapping a rain cloud again counts it down: 3, 2,
 1, 3. Under the map, − and + change its width and height and how many slots
 the program has (and each function, when there are functions). The buttons
-under the tiles choose the blocks it allows: the axe, wait, repeat, loops,
+under the tiles choose the blocks it allows: the axe, sleep, repeat, loops,
 "repeat until", "if", "else", "not", the two functions and numbers for them.
 Some bring others along, as in the game's own levels: loops need repeat;
 "repeat until" and functions need loops; "else" and "not" need an "if"; and
 numbers need a function. Mystery clouds always come with "if" and the axe,
-and rain clouds with wait. The "if" can look for anything painted on the
+and rain clouds with sleep. The "if" can look for anything painted on the
 map, grass, and the edge.
 
 Press play to try the map out. The arrow at the top left goes back to
@@ -167,7 +167,7 @@ version to GitHub Pages (`.github/workflows/pages.yml`).
 | L | Open or close a loop |
 | I, then a choice and an arrow | Start an "if" (again to close) |
 | X (while choosing) | "Not": if there's *no*... |
-| Z | Wait a tick |
+| Z | Sleep a tick |
 | , / . | Move the slider back / forward a step |
 | E | Else, inside an "if" |
 | W, then an arrow | Start "repeat until there's a wall that way" (again to close) |

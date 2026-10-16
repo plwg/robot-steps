@@ -87,8 +87,8 @@ impl Tile {
 pub enum Cmd {
     Move(Dir),
     Chop(Dir),
-    /// Do nothing for a tick, while the rain clouds count down.
-    Wait,
+    /// Sleep for a tick (doing nothing), while the rain clouds count down.
+    Sleep,
 }
 
 impl Cmd {
@@ -96,7 +96,7 @@ impl Cmd {
     pub fn dir(self) -> Option<Dir> {
         match self {
             Cmd::Move(d) | Cmd::Chop(d) => Some(d),
-            Cmd::Wait => None,
+            Cmd::Sleep => None,
         }
     }
 }
@@ -414,7 +414,7 @@ impl Runner<'_> {
 }
 
 /// A whole program written as text: strips separated by `|`. Within a strip,
-/// `R` moves right, `cR` chops right, `W` waits, and a number repeats a
+/// `R` moves right, `cR` chops right, `Z` sleeps, and a number repeats a
 /// block. `[` opens a loop and `]4` closes it, running it 4 times; `<R`
 /// opens a loop that runs until there's a wall to the right, closed with `]`.
 /// `{tR` starts "if there's a tree to the right", `{sU` "if there's a star
@@ -491,8 +491,8 @@ pub fn parse_program(text: &str) -> Vec<Item> {
                 }
                 Item::LoopEnd
             }
-            (Some('W'), None) => Item::Block(Block {
-                cmd: Cmd::Wait,
+            (Some('Z'), None) => Item::Block(Block {
+                cmd: Cmd::Sleep,
                 times,
             }),
             (Some('c'), Some(d)) => Item::Block(Block {
@@ -551,8 +551,8 @@ pub struct LevelDef {
     fn_slots: usize,
     /// Functions are called with a number, which counts inside them can use.
     numbers: bool,
-    /// The wait block.
-    wait: bool,
+    /// The sleep block.
+    sleep: bool,
     /// A demo level comes with its program already written, to show how a
     /// new block is used: just press play.
     demo: Option<&'static str>,
@@ -573,7 +573,7 @@ const fn level(id: &'static str, map: &'static [&'static str]) -> LevelDef {
         functions: 0,
         fn_slots: 0,
         numbers: false,
-        wait: false,
+        sleep: false,
         demo: None,
     }
 }
@@ -633,10 +633,10 @@ impl LevelDef {
         self
     }
 
-    /// Unlock the wait block (and repeat, to wait a few ticks), and limit the
+    /// Unlock the sleep block (and repeat, to sleep a few ticks), and limit the
     /// program to `slots`.
-    const fn with_wait(mut self, slots: usize) -> Self {
-        self.wait = true;
+    const fn with_sleep(mut self, slots: usize) -> Self {
+        self.sleep = true;
         self.with_repeat(slots)
     }
 
@@ -1031,23 +1031,23 @@ pub const CHAPTERS: &[Chapter] = &[
         ],
     },
     // Rain clouds count down 3, 2, 1, then rain for a bit, and start again.
-    // Every step takes a tick, so wait for the rain to pass (or hurry
+    // Every step takes a tick, so sleep while it rains (or hurry
     // across before it starts). Don't get wet!
     Chapter {
         name: "Rain",
         levels: &[
-            level("rain-demo", &["R.2.*"]).with_wait(3).demo("R W3 R3"),
-            level("rain-1", &["R1.*"]).with_wait(2),
-            // Hurry across the first one; wait for the second.
-            level("rain-2", &["R.12.*"]).with_wait(2),
-            level("rain-3", &["R3.1.*"]).with_wait(2),
-            level("rain-4", &["R12.3*"]).with_wait(2),
-            level("rain-5", &["R2.1.3.*"]).with_wait(3),
+            level("rain-demo", &["R.2.*"]).with_sleep(3).demo("R Z3 R3"),
+            level("rain-1", &["R1.*"]).with_sleep(2),
+            // Hurry across the first one; sleep through the second.
+            level("rain-2", &["R.12.*"]).with_sleep(2),
+            level("rain-3", &["R3.1.*"]).with_sleep(2),
+            level("rain-4", &["R12.3*"]).with_sleep(2),
+            level("rain-5", &["R2.1.3.*"]).with_sleep(3),
             // Two ways round: which one keeps dry?
-            level("rain-6", &["R@@@", ".2.*", "@1@."]).with_wait(3),
-            // The same wait each time: a loop.
-            level("rain-7", &["R1.1.1.1.*"]).with_wait(2).with_loops(2),
-            level("rain-8", &["R.2.2.2.2*"]).with_wait(3).with_loops(3),
+            level("rain-6", &["R@@@", ".2.*", "@1@."]).with_sleep(3),
+            // The same sleep each time: a loop.
+            level("rain-7", &["R1.1.1.1.*"]).with_sleep(2).with_loops(2),
+            level("rain-8", &["R.2.2.2.2*"]).with_sleep(3).with_loops(3),
         ],
     },
     // Every block so far.
@@ -1098,7 +1098,7 @@ pub struct Level {
     pub functions: usize,
     pub fn_slots: usize,
     pub numbers: bool,
-    pub wait: bool,
+    pub sleep: bool,
     /// Where the mystery clouds are.
     pub mysteries: Vec<Pos>,
     /// Where the keys lie.
@@ -1128,7 +1128,7 @@ impl Level {
         level.functions = def.functions;
         level.fn_slots = def.fn_slots;
         level.numbers = def.numbers;
-        level.wait = def.wait;
+        level.sleep = def.sleep;
         level.demo = def.demo.map(parse_strips);
         level
     }
@@ -1183,7 +1183,7 @@ impl Level {
             functions: 0,
             fn_slots: 0,
             numbers: false,
-            wait: false,
+            sleep: false,
             mysteries,
             keys,
             id: "",
@@ -1271,8 +1271,8 @@ pub enum Event {
         unlocked: bool,
     },
     Chopped(Pos),
-    /// Waited a tick.
-    Waited,
+    /// Slept a tick.
+    Slept,
     /// An "if" looked at `at`: `yes` if it saw what it was looking for. (The
     /// game uses this for its animation; `World::act` never returns it.)
     Tested {
@@ -1374,7 +1374,7 @@ impl World {
     pub fn act(&mut self, cmd: Cmd) -> Result<Event, ()> {
         let Some(dir) = cmd.dir() else {
             self.tick();
-            return Ok(Event::Waited);
+            return Ok(Event::Slept);
         };
         let (dx, dy) = dir.delta();
         let step = |(x, y): Pos| (x + dx, y + dy);
@@ -1466,8 +1466,8 @@ mod tests {
         ("39", "[ U2 R2 D2 R2 ]2 U2 R2"),
         ("40", "[ cR R2 ]4"),
         ("73", "[ R U D R2 ]3"),
-        ("rain-7", "[ W3 R2 ]5"),
-        ("rain-8", "R [ W3 R2 ]4"),
+        ("rain-7", "[ Z3 R2 ]5"),
+        ("rain-8", "R [ Z3 R2 ]4"),
     ];
 
     /// Known solutions for the "repeat until" levels. `<R` starts "repeat
@@ -1733,8 +1733,8 @@ mod tests {
             if level.chop {
                 cmds.push(Cmd::Chop(dir));
             }
-            if level.wait && dir == Dir::Up {
-                cmds.push(Cmd::Wait);
+            if level.sleep && dir == Dir::Up {
+                cmds.push(Cmd::Sleep);
             }
             for cmd in cmds {
                 for times in 1..=MAX_TIMES {
@@ -2224,7 +2224,7 @@ mod tests {
         chop: bool,
         /// "If there's a tree that way { chop it }" (two tiles).
         if_chop: bool,
-        wait: bool,
+        sleep: bool,
     }
 
     impl Allow {
@@ -2233,7 +2233,7 @@ mod tests {
                 repeat: level.repeat,
                 chop: level.chop,
                 if_chop: can_if_chop(level),
-                wait: level.wait,
+                sleep: level.sleep,
             }
         }
     }
@@ -2255,8 +2255,8 @@ mod tests {
         if allow.if_chop {
             steps.extend(Dir::ALL.map(Piece::IfChop));
         }
-        if allow.wait {
-            steps.push(Piece::Do(Cmd::Wait));
+        if allow.sleep {
+            steps.push(Piece::Do(Cmd::Sleep));
         }
         let max_times = if allow.repeat { MAX_TIMES } else { 1 };
 
@@ -2526,16 +2526,16 @@ mod tests {
     fn rain_counts_down_then_rains() {
         let mut world = Level::parse(&level("test", &["R2..*"])).world();
         assert_eq!(world.weather((1, 0)), Some(Weather::Dry(2)));
-        world.act(Cmd::Wait).unwrap();
+        world.act(Cmd::Sleep).unwrap();
         assert_eq!(world.weather((1, 0)), Some(Weather::Dry(1)));
-        world.act(Cmd::Wait).unwrap();
+        world.act(Cmd::Sleep).unwrap();
         assert_eq!(world.weather((1, 0)), Some(Weather::Raining));
         assert!(
             world.act(Cmd::Move(Dir::Right)).is_err(),
             "can't drive into rain"
         );
-        world.act(Cmd::Wait).unwrap();
-        world.act(Cmd::Wait).unwrap();
+        world.act(Cmd::Sleep).unwrap();
+        world.act(Cmd::Sleep).unwrap();
         assert_eq!(
             world.weather((1, 0)),
             Some(Weather::Dry(3)),
@@ -2545,26 +2545,26 @@ mod tests {
         world.act(Cmd::Move(Dir::Right)).unwrap();
         assert!(!world.wet());
         // ...but standing there until it rains is getting wet.
-        world.act(Cmd::Wait).unwrap();
+        world.act(Cmd::Sleep).unwrap();
         assert!(!world.wet());
-        world.act(Cmd::Wait).unwrap();
+        world.act(Cmd::Sleep).unwrap();
         assert!(world.wet());
     }
 
     #[test]
-    fn rain_levels_need_wait() {
-        for level in numbered().iter().filter(|l| l.wait) {
+    fn rain_levels_need_sleep() {
+        for level in numbered().iter().filter(|l| l.sleep) {
             let mut without = level.clone();
-            without.wait = false;
+            without.sleep = false;
             if level.loops {
                 if let Some(program) = fits_with_loops(&without, level.slots) {
-                    panic!("level {} fits without waiting: {program:?}", level.id);
+                    panic!("level {} fits without sleeping: {program:?}", level.id);
                 }
             } else {
                 let tiles = fewest_blocks(&without, Allow::level(&without)).unwrap_or(usize::MAX);
                 assert!(
                     tiles > level.slots,
-                    "level {} fits in {tiles} without waiting",
+                    "level {} fits in {tiles} without sleeping",
                     level.id
                 );
             }

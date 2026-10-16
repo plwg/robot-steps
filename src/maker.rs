@@ -8,12 +8,12 @@ use crate::level::{Dir, Weather};
 use crate::sound::Sfx;
 use crate::{
     AXE_BROWN, BACK_BUTTON, CALL_INK, DISABLED, Face, GRASS, GRASS_DARK, Game, IF_LIME, INK,
-    MAX_CELL, PANEL, PLAY_GREEN, Paint, REPEAT_TEAL, SHADOW, SKY, STAR, STOP_RED, Screen, W,
-    WAIT_SLATE, darker, dir_color, draw_answer, draw_arrow, draw_axe_badge, draw_bracket,
-    draw_door, draw_ice, draw_key, draw_label, draw_loop_icon, draw_mystery, draw_no_sign,
-    draw_number_icon, draw_play_icon, draw_question, draw_rain_cloud, draw_robot, draw_rock,
-    draw_shape, draw_star, draw_trash_icon, draw_tree, draw_until_icon, draw_wait_icon, mix,
-    progress, rounded_rect,
+    MAX_CELL, PANEL, PLAY_GREEN, Paint, REPEAT_TEAL, SHADOW, SKY, SLEEP_SLATE, STAR, STOP_RED,
+    Screen, W, darker, dir_color, draw_answer, draw_arrow, draw_axe_badge, draw_bracket, draw_door,
+    draw_ice, draw_key, draw_label, draw_loop_icon, draw_mystery, draw_no_sign, draw_number_icon,
+    draw_play_icon, draw_question, draw_rain_cloud, draw_robot, draw_rock, draw_shape,
+    draw_sleep_icon, draw_star, draw_trash_icon, draw_tree, draw_until_icon, mix, progress,
+    rounded_rect,
 };
 
 /// Where the map maker is up to.
@@ -559,7 +559,7 @@ fn draw_back_button() {
 fn tool_colour(tool: Tool) -> Color {
     match tool {
         Tool::Axe => AXE_BROWN,
-        Tool::Wait => WAIT_SLATE,
+        Tool::Sleep => SLEEP_SLATE,
         Tool::Repeat | Tool::Loops | Tool::Until => REPEAT_TEAL,
         Tool::If | Tool::Else | Tool::Not => IF_LIME,
         Tool::Fn1 | Tool::Fn2 | Tool::Numbers => CALL_INK,
@@ -583,7 +583,7 @@ fn draw_tool_icon(tool: Tool, c: Vec2, half: f32) {
         Tool::Fn1 => draw_shape(c, half * 0.55, 1),
         Tool::Fn2 => draw_shape(c, half * 0.55, 2),
         Tool::Numbers => draw_number_icon(c, half, 1),
-        Tool::Wait => draw_wait_icon(c, size, WHITE),
+        Tool::Sleep => draw_sleep_icon(c, size, WHITE),
         Tool::Not => draw_no_sign(c, half * 0.6),
     }
 }

@@ -31,7 +31,7 @@ const CHOP_TIME: f32 = 0.7;
 const BUMP_TIME: f32 = 0.8;
 const SAD_TIME: f32 = 1.4;
 const CHECK_TIME: f32 = 0.7;
-const WAIT_TIME: f32 = 0.45;
+const SLEEP_TIME: f32 = 0.7;
 /// A "repeat until" looks every time round, so it looks quickly.
 const UNTIL_LOOK_TIME: f32 = 0.4;
 const REVEAL_TIME: f32 = 0.8;
@@ -87,7 +87,7 @@ const LOOP_BAND: Color = Color::new(0.72, 0.9, 0.9, 1.0);
 const CLOUD: Color = Color::new(0.97, 0.97, 1.0, 1.0);
 const RAIN_CLOUD: Color = Color::new(0.48, 0.52, 0.62, 1.0);
 const RAIN_BLUE: Color = Color::new(0.25, 0.5, 0.95, 1.0);
-const WAIT_SLATE: Color = Color::new(0.45, 0.5, 0.62, 1.0);
+const SLEEP_SLATE: Color = Color::new(0.45, 0.5, 0.62, 1.0);
 const WOOD: Color = Color::new(0.55, 0.35, 0.2, 1.0);
 const LEAF: Color = Color::new(0.16, 0.55, 0.22, 1.0);
 const ICE: Color = Color::new(0.8, 0.93, 0.99, 1.0);
@@ -352,24 +352,20 @@ fn draw_rain_cloud(c: Vec2, cell: f32, weather: Weather, time: f32) {
     }
 }
 
-/// An hourglass: wait a tick.
-fn draw_wait_icon(c: Vec2, size: f32, colour: Color) {
-    let (w, h) = (size * 0.32, size * 0.36);
-    let t = size * 0.05;
-    draw_rectangle(c.x - w * 0.6, c.y - h - t, w * 1.2, t, colour);
-    draw_rectangle(c.x - w * 0.6, c.y + h, w * 1.2, t, colour);
-    draw_triangle(
-        vec2(c.x - w * 0.5, c.y - h),
-        vec2(c.x + w * 0.5, c.y - h),
-        c,
-        colour,
-    );
-    draw_triangle(
-        vec2(c.x - w * 0.5, c.y + h),
-        vec2(c.x + w * 0.5, c.y + h),
-        c,
-        colour,
-    );
+/// A letter Z, `size` tall.
+fn draw_z(c: Vec2, size: f32, colour: Color) {
+    let h = size / 2.0;
+    let w = size * 0.4;
+    let t = size * 0.16;
+    draw_line(c.x - w, c.y - h, c.x + w, c.y - h, t, colour);
+    draw_line(c.x + w, c.y - h, c.x - w, c.y + h, t, colour);
+    draw_line(c.x - w, c.y + h, c.x + w, c.y + h, t, colour);
+}
+
+/// A small z and a big Z: sleep a tick.
+fn draw_sleep_icon(c: Vec2, size: f32, colour: Color) {
+    draw_z(c + vec2(-size * 0.14, size * 0.14), size * 0.28, colour);
+    draw_z(c + vec2(size * 0.14, -size * 0.12), size * 0.4, colour);
 }
 
 /// A thought bubble with a question mark, for when the robot is checking.
@@ -568,6 +564,8 @@ enum Face {
     Sad,
     /// Sliding on ice: wide eyes and an "O" mouth.
     Wow,
+    /// Sleeping: eyes shut.
+    Asleep,
 }
 
 /// Each player's robot has its own colours.
@@ -645,7 +643,9 @@ fn draw_robot(c: Vec2, cell: f32, face: Face, look: Vec2, time: f32, lift: f32, 
     let blink = (time % 3.7) < 0.12;
     for side in [-1.0, 1.0] {
         let eye = vec2(c.x + side * s * 0.12, c.y - s * 0.06);
-        if blink {
+        if face == Face::Asleep {
+            draw_arc(eye, s * 0.06, 0.1 * PI, 0.9 * PI, s * 0.03, WHITE);
+        } else if blink {
             draw_line(
                 eye.x - s * 0.06,
                 eye.y,
@@ -682,6 +682,7 @@ fn draw_robot(c: Vec2, cell: f32, face: Face, look: Vec2, time: f32, lift: f32, 
         ),
         Face::Calm => draw_line(m.x - s * 0.06, m.y, m.x + s * 0.06, m.y, s * 0.03, mouth),
         Face::Wow => draw_circle_lines(m.x, m.y + s * 0.01, s * 0.045, s * 0.03, mouth),
+        Face::Asleep => draw_circle(m.x, m.y + s * 0.02, s * 0.03, mouth),
     }
 }
 
@@ -781,8 +782,8 @@ fn draw_fullscreen_icon(c: Vec2, r: f32, color: Color) {
 enum Button {
     Arrow(Dir),
     Axe,
-    /// Wait a tick.
-    Wait,
+    /// Sleep a tick.
+    Sleep,
     Repeat,
     Loop,
     /// Start an "if" block (then pick what it looks for, and which way), or
@@ -842,8 +843,8 @@ enum Mode {
     Moving,
     /// Chopping down a tree.
     Chopping,
-    /// Waiting a tick.
-    Waiting,
+    /// Sleeping a tick.
+    Sleeping,
     /// Walked into something, or swung the axe at something that isn't a tree.
     Bump,
     /// Program finished (or got stuck) without getting every star.
@@ -969,7 +970,7 @@ enum Kind {
 
 impl Kind {
     fn of(level: &Level) -> Kind {
-        if level.wait {
+        if level.sleep {
             Kind::Rain
         } else if level.numbers {
             Kind::Number
@@ -1279,11 +1280,11 @@ impl Game {
             Mode::Moving => self.move_time(),
             Mode::Checking => self.check_time(),
             Mode::Chopping => CHOP_TIME,
-            Mode::Waiting => WAIT_TIME,
+            Mode::Sleeping => SLEEP_TIME,
             _ => 1.0,
         };
         let part = match self.mode {
-            Mode::Moving | Mode::Checking | Mode::Chopping | Mode::Waiting => {
+            Mode::Moving | Mode::Checking | Mode::Chopping | Mode::Sleeping => {
                 (self.timer / len).min(1.0)
             }
             // Over: past the last step (the one that won, or went wrong).
@@ -1489,7 +1490,7 @@ impl Game {
             self.mode,
             Mode::Reveal
                 | Mode::Moving
-                | Mode::Waiting
+                | Mode::Sleeping
                 | Mode::Checking
                 | Mode::Chopping
                 | Mode::Bump
@@ -1634,7 +1635,7 @@ impl Game {
             Button::Repeat => self.level().repeat,
             Button::Loop => self.level().loops,
             Button::If => !self.level().ifs.is_empty(),
-            Button::Wait => self.level().wait,
+            Button::Sleep => self.level().sleep,
             Button::Sense(sense) => self.picking() && self.level().ifs.contains(&sense),
             Button::Not => self.picking() && self.level().not,
             Button::Else => self.level().otherwise,
@@ -1648,7 +1649,7 @@ impl Game {
     fn enabled(&self, button: Button) -> bool {
         let editing = self.mode == Mode::Edit;
         match button {
-            Button::Arrow(_) | Button::Axe | Button::Wait | Button::Sense(_) | Button::Not => {
+            Button::Arrow(_) | Button::Axe | Button::Sleep | Button::Sense(_) | Button::Not => {
                 editing && self.can_place()
             }
             // A loop can hold an "if", but an "if" can't hold a loop.
@@ -1712,10 +1713,10 @@ impl Game {
             Button::Axe => {
                 self.armed = (self.armed != Some(button)).then_some(button);
             }
-            Button::Wait => {
+            Button::Sleep => {
                 self.armed = None;
                 self.insert(Item::Block(Block {
-                    cmd: Cmd::Wait,
+                    cmd: Cmd::Sleep,
                     times: 1,
                 }));
             }
@@ -1860,13 +1861,13 @@ impl Game {
                     Event::Moved { .. } if self.move_plan().is_some_and(|p| p.slide) => Sfx::Slide,
                     Event::Moved { .. } => Sfx::Step(self.facing),
                     Event::Chopped(_) => Sfx::Chop,
-                    Event::Waited => Sfx::Wait,
+                    Event::Slept => Sfx::Sleep,
                     Event::Tested { .. } => Sfx::Look,
                 });
                 self.set_mode(match event {
                     Event::Moved { .. } => Mode::Moving,
                     Event::Chopped(_) => Mode::Chopping,
-                    Event::Waited => Mode::Waiting,
+                    Event::Slept => Mode::Sleeping,
                     Event::Tested { .. } => Mode::Checking,
                 });
             }
@@ -1949,7 +1950,7 @@ impl Game {
             Mode::Moving if self.timer >= self.move_time() => self.finish_action(),
             Mode::Checking if self.timer >= self.check_time() => self.finish_action(),
             Mode::Chopping if self.timer >= CHOP_TIME => self.finish_action(),
-            Mode::Waiting if self.timer >= WAIT_TIME => self.finish_action(),
+            Mode::Sleeping if self.timer >= SLEEP_TIME => self.finish_action(),
             Mode::Bump if self.timer >= BUMP_TIME => self.set_mode(Mode::Sad),
             Mode::Sad if self.timer >= SAD_TIME => self.reset_robot(),
             Mode::Win if self.timer > 1.5 && (self.timer % 1.2) < dt => self.confetti(),
@@ -2109,7 +2110,7 @@ impl Game {
             (KeyCode::L, Button::Loop),
             (KeyCode::I, Button::If),
             (KeyCode::X, Button::Not),
-            (KeyCode::Z, Button::Wait),
+            (KeyCode::Z, Button::Sleep),
             (KeyCode::E, Button::Else),
             (KeyCode::W, Button::Until),
             (KeyCode::N, Button::Number),
@@ -2169,7 +2170,7 @@ impl Game {
         }
         let tools: Vec<Button> = [
             Button::Axe,
-            Button::Wait,
+            Button::Sleep,
             Button::Repeat,
             Button::Loop,
             Button::Until,
@@ -3153,6 +3154,7 @@ impl Game {
                 }
             }
             (Mode::Chopping, _) => (pos, 0.0, Face::Happy),
+            (Mode::Sleeping, _) => (pos, 0.0, Face::Asleep),
             (Mode::Checking, _) => (pos, 0.0, Face::Calm),
             (Mode::Bump, _) => {
                 let t = self.timer / BUMP_TIME;
@@ -3219,6 +3221,20 @@ impl Game {
         if self.mode == Mode::Checking {
             draw_thought(c, cell);
         }
+        // Z's drift up from a sleeping robot, getting bigger as they go.
+        if self.mode == Mode::Sleeping {
+            let t = self.timer / SLEEP_TIME;
+            for k in 0..3 {
+                let u = t - k as f32 * 0.3;
+                if !(0.0..1.0).contains(&u) {
+                    continue;
+                }
+                let sway = (u * PI * 2.0).sin() * 0.06;
+                let at = c + vec2(cell * (0.25 + u * 0.3 + sway), -cell * (0.3 + u * 0.6));
+                let fade = Color::new(1.0, 1.0, 1.0, (1.0 - u).min(0.3) / 0.3);
+                draw_z(at, cell * (0.12 + u * 0.16), fade);
+            }
+        }
 
         // Swing the axe while chopping (or while trying to chop something
         // that isn't a tree).
@@ -3251,7 +3267,7 @@ impl Game {
         match cmd {
             Cmd::Move(dir) => dir_color(dir),
             Cmd::Chop(_) => AXE_BROWN,
-            Cmd::Wait => WAIT_SLATE,
+            Cmd::Sleep => SLEEP_SLATE,
         }
     }
 
@@ -3282,7 +3298,7 @@ impl Game {
             Item::Block(b) => match b.cmd {
                 Cmd::Move(dir) => draw_arrow(r.center(), r.w * 0.8, dir, WHITE),
                 Cmd::Chop(dir) => draw_chop_icon(r.center(), r.w, dir),
-                Cmd::Wait => draw_wait_icon(r.center(), r.w, WHITE),
+                Cmd::Sleep => draw_sleep_icon(r.center(), r.w, WHITE),
             },
             Item::LoopStart { .. } | Item::LoopEnd | Item::Else | Item::IfEnd | Item::Gap => {}
             Item::IfStart { sense, dir, not } => draw_if_icon(r.center(), r.w, sense, dir, not),
@@ -3363,7 +3379,7 @@ impl Game {
 
         let running = matches!(
             self.mode,
-            Mode::Moving | Mode::Waiting | Mode::Checking | Mode::Chopping | Mode::Bump
+            Mode::Moving | Mode::Sleeping | Mode::Checking | Mode::Chopping | Mode::Bump
         );
         // While building, the step the slider is just before.
         let current = match (&self.sim, self.mode) {
@@ -3500,7 +3516,7 @@ impl Game {
             let (colour, round) = match button {
                 Button::Arrow(dir) => (dir_color(dir), 18.0),
                 Button::Axe => (AXE_BROWN, 18.0),
-                Button::Wait => (WAIT_SLATE, 18.0),
+                Button::Sleep => (SLEEP_SLATE, 18.0),
                 Button::Repeat | Button::Loop => (REPEAT_TEAL, 18.0),
                 Button::If | Button::Sense(_) | Button::Not | Button::Else => (IF_LIME, 18.0),
                 Button::Until => (REPEAT_TEAL, 18.0),
@@ -3553,7 +3569,7 @@ impl Game {
                     _ => draw_arrow(c, size * 0.8, dir, WHITE),
                 },
                 Button::Axe => draw_axe_badge(c, size * 0.75),
-                Button::Wait => draw_wait_icon(c, size, WHITE),
+                Button::Sleep => draw_sleep_icon(c, size, WHITE),
                 Button::Repeat => {
                     draw_loop_icon(c, half, WHITE);
                     // Show what the next tap will make the last block (or loop).

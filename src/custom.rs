@@ -25,8 +25,9 @@ fn paintable(c: char) -> bool {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Tool {
     Axe,
-    /// The wait block. Rain clouds always bring it.
-    Wait,
+    /// The sleep block. Rain clouds always bring it. (Saved as "wait",
+    /// its old name.)
+    Sleep,
     Repeat,
     Loops,
     /// "Repeat until there's a wall".
@@ -48,7 +49,7 @@ impl Tool {
     /// needs.
     pub const ALL: [Tool; 11] = [
         Tool::Axe,
-        Tool::Wait,
+        Tool::Sleep,
         Tool::Repeat,
         Tool::Loops,
         Tool::Until,
@@ -68,7 +69,7 @@ impl Tool {
             Tool::Until => "until",
             Tool::Else => "else",
             Tool::Numbers => "numbers",
-            Tool::Wait => "wait",
+            Tool::Sleep => "wait",
             Tool::Not => "not",
             Tool::If => "if",
             Tool::Fn1 => "fn1",
@@ -94,7 +95,7 @@ pub struct CustomMap {
     otherwise: bool,
     functions: usize,
     numbers: bool,
-    wait: bool,
+    sleep: bool,
     not: bool,
 }
 
@@ -115,7 +116,7 @@ impl CustomMap {
             otherwise: false,
             functions: 0,
             numbers: false,
-            wait: false,
+            sleep: false,
             not: false,
         };
         map.paint(0, 1, 'R');
@@ -177,7 +178,7 @@ impl CustomMap {
             Tool::Fn1 => self.functions >= 1,
             Tool::Fn2 => self.functions >= 2,
             Tool::Numbers => self.numbers,
-            Tool::Wait => self.wait,
+            Tool::Sleep => self.sleep,
             Tool::Not => self.not,
         }
     }
@@ -202,7 +203,7 @@ impl CustomMap {
             Tool::Fn1 => self.functions = usize::from(on),
             Tool::Fn2 => self.functions = if on { 2 } else { 1 },
             Tool::Numbers => self.numbers = on,
-            Tool::Wait => self.wait = on,
+            Tool::Sleep => self.sleep = on,
             Tool::Not => self.not = on,
         }
         if on {
@@ -268,7 +269,7 @@ impl CustomMap {
         level.functions = self.functions;
         level.numbers = self.numbers;
         level.not = self.not;
-        level.wait = self.wait || self.cells.iter().any(|&c| matches!(c, '1'..='3'));
+        level.sleep = self.sleep || self.cells.iter().any(|&c| matches!(c, '1'..='3'));
         level
     }
 }
@@ -392,10 +393,10 @@ mod tests {
     }
 
     #[test]
-    fn rain_clouds_count_down_and_bring_wait() {
+    fn rain_clouds_count_down_and_bring_sleep() {
         let mut m = CustomMap::new();
         m.paint(2, 1, '3');
-        assert!(m.to_level().wait, "rain brings the wait block");
+        assert!(m.to_level().sleep, "rain brings the sleep block");
         let maps = parse(&format(std::slice::from_ref(&m)));
         assert_eq!(maps[0].get(2, 1), '3');
         m.paint(2, 1, '1');

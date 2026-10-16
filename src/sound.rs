@@ -144,8 +144,8 @@ pub enum Sfx {
     Win,
     /// A button.
     Tap,
-    /// Waiting a tick: tick-tock.
-    Wait,
+    /// Sleeping a tick: a little snore.
+    Sleep,
     /// Rain starting on the robot.
     Rain,
 }
@@ -170,7 +170,7 @@ impl Sfx {
         Sfx::Sad,
         Sfx::Win,
         Sfx::Tap,
-        Sfx::Wait,
+        Sfx::Sleep,
         Sfx::Rain,
     ];
 
@@ -224,9 +224,10 @@ impl Sfx {
                 note(0.3, 0.3, C5, G5, Triangle, 0.3),
             ],
             Sfx::Look => vec![note(0.0, 0.25, 420.0, 640.0, Sine, 0.3)],
-            Sfx::Wait => vec![
-                note(0.0, 0.05, 1400.0, 1400.0, Triangle, 0.3),
-                note(0.2, 0.05, 1000.0, 1000.0, Triangle, 0.3),
+            Sfx::Sleep => vec![
+                note(0.0, 0.3, 110.0, 90.0, Triangle, 0.35).wobble(30.0, 0.08),
+                note(0.0, 0.3, 1.0, 1.0, Noise, 0.04),
+                note(0.4, 0.2, 700.0, 900.0, Sine, 0.12),
             ],
             Sfx::Rain => vec![note(0.0, 0.8, 1.0, 1.0, Noise, 0.25)],
             Sfx::Yes => vec![
