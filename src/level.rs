@@ -66,14 +66,30 @@ pub enum Tile {
 /// for `RAIN_WET`, then starts again.
 pub const RAIN_DRY: u8 = 3;
 pub const RAIN_WET: u8 = 2;
-const RAIN_CYCLE: u8 = RAIN_DRY + RAIN_WET;
+pub const RAIN_CYCLE: u8 = RAIN_DRY + RAIN_WET;
 
 /// What a rain tile is doing.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Weather {
     /// Counting down: how many ticks until it rains.
     Dry(u8),
-    Raining,
+    /// Raining: how many ticks of rain are left, counting this one.
+    Raining(u8),
+}
+
+impl Weather {
+    pub fn raining(self) -> bool {
+        matches!(self, Weather::Raining(_))
+    }
+
+    /// How far round its cycle the cloud is: 0 to `RAIN_CYCLE - 1`, the dry
+    /// ticks first.
+    pub fn phase(self) -> u8 {
+        match self {
+            Weather::Dry(n) => RAIN_DRY - n,
+            Weather::Raining(n) => RAIN_CYCLE - n,
+        }
+    }
 }
 
 impl Tile {
@@ -1383,7 +1399,7 @@ impl World {
     fn can_enter(&self, p: Pos) -> bool {
         match self.tile(p) {
             Some(Tile::Door) => self.held > 0,
-            Some(tile) => tile.passable() && self.weather(p) != Some(Weather::Raining),
+            Some(tile) => tile.passable() && !self.weather(p).is_some_and(Weather::raining),
             None => false,
         }
     }
@@ -1397,13 +1413,13 @@ impl World {
         Some(if phase < RAIN_DRY {
             Weather::Dry(RAIN_DRY - phase)
         } else {
-            Weather::Raining
+            Weather::Raining(RAIN_CYCLE - phase)
         })
     }
 
     /// Is the robot getting rained on?
     pub fn wet(&self) -> bool {
-        self.weather(self.pos) == Some(Weather::Raining)
+        self.weather(self.pos).is_some_and(Weather::raining)
     }
 
     /// Every action takes a tick, and the rain clouds count down. (Without
@@ -1451,7 +1467,7 @@ impl World {
                 // something isn't a bump: that's how it stops.
                 while self.tile(self.pos) == Some(Tile::Ice)
                     && self.tile(step(self.pos)).is_some_and(Tile::passable)
-                    && self.weather(step(self.pos)) != Some(Weather::Raining)
+                    && !self.weather(step(self.pos)).is_some_and(Weather::raining)
                 {
                     self.pos = step(self.pos);
                 }
@@ -2603,7 +2619,7 @@ mod tests {
         world.act(Cmd::Sleep).unwrap();
         assert_eq!(world.weather((1, 0)), Some(Weather::Dry(1)));
         world.act(Cmd::Sleep).unwrap();
-        assert_eq!(world.weather((1, 0)), Some(Weather::Raining));
+        assert_eq!(world.weather((1, 0)), Some(Weather::Raining(2)));
         assert!(
             world.act(Cmd::Move(Dir::Right)).is_err(),
             "can't drive into rain"

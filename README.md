@@ -51,10 +51,13 @@ introduces, in the order programming is usually taught:
 15. **Function numbers:** call ● with a number (set with repeat), and
     inside it a count can be "●'s number" instead of a fixed one, so one
     function makes stairs of 1, 2 and 3
-16. **Rain:** rain clouds count down 3, 2, 1, rain for a bit, then start
-    again. Every action takes a tick, so sleep while it rains (the sleep
-    block, Zzz, repeated like any other) or hurry across before it starts. Being
-    under a cloud when it rains is getting wet, and the end of the run
+16. **Rain:** rain clouds count down 3, 2, 1, rain for 2, then start again.
+    A row under each cloud shows its whole cycle (a dot for each dry tick, a
+    drop for each tick of rain, with the one it's on now ringed), and while
+    it rains the cloud counts down how much is left. Every action takes a
+    tick, so sleep while it rains (the sleep block, Zzz, repeated like any
+    other) or hurry across before it starts. Being under a cloud when it
+    rains is getting wet, and the end of the run
 17. **All together**
 
 Throughout, a **slider** along the top runs the program ahead of time, while

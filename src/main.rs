@@ -14,8 +14,8 @@ use std::f32::consts::PI;
 
 use custom::CustomMap;
 use level::{
-    Block, Cmd, Dir, Event, Exec, Item, Level, Loc, MAX_TIMES, NUMBER, Pos, Sense, Simulation,
-    Step, Tile, Weather, World, tiles,
+    Block, Cmd, Dir, Event, Exec, Item, Level, Loc, MAX_TIMES, NUMBER, Pos, RAIN_CYCLE, RAIN_DRY,
+    RAIN_WET, Sense, Simulation, Step, Tile, Weather, World, tiles,
 };
 use macroquad::prelude::*;
 use macroquad::rand::gen_range;
@@ -335,7 +335,7 @@ fn draw_rain_cloud(c: Vec2, cell: f32, weather: Weather, time: f32) {
             draw_puff(high, cell * 0.5);
             draw_label(&n.to_string(), high, cell * 0.24, RAIN_BLUE);
         }
-        Weather::Raining => {
+        Weather::Raining(n) => {
             for i in 0..7 {
                 let x = c.x + (i as f32 / 6.0 - 0.5) * cell * 0.6;
                 let fall = (time * 2.2 + i as f32 * 0.37).fract();
@@ -350,6 +350,46 @@ fn draw_rain_cloud(c: Vec2, cell: f32, weather: Weather, time: f32) {
                 );
             }
             draw_puff_in(top, cell * 0.72, RAIN_CLOUD);
+            // How much longer it rains, in white on the dark cloud.
+            draw_label(&n.to_string(), top, cell * 0.24, WHITE);
+        }
+    }
+}
+
+/// The whole of a rain cloud's cycle, along the bottom of its tile: a white
+/// dot for each dry tick, then a blue drop for each tick of rain. The one
+/// it's on now is big; ones already gone are faint.
+pub fn draw_rain_timeline(c: Vec2, cell: f32, weather: Weather) {
+    let now = weather.phase();
+    let gap = cell * 0.18;
+    let y = c.y + cell * 0.38;
+    for k in 0..RAIN_CYCLE {
+        let x = c.x + (k as f32 - (RAIN_CYCLE - 1) as f32 / 2.0) * gap;
+        let r = cell * if k == now { 0.065 } else { 0.05 };
+        let a = if k < now { 0.35 } else { 1.0 };
+        let p = vec2(x, y);
+        // A ring round the one it's on now.
+        if k == now {
+            draw_circle_lines(p.x, p.y - r * 0.3, r * 2.0, cell * 0.02, INK);
+        }
+        draw_circle(
+            p.x,
+            p.y + cell * 0.01,
+            r * 1.25,
+            Color::new(0.0, 0.0, 0.0, 0.2 * a),
+        );
+        if k < RAIN_DRY {
+            draw_circle(p.x, p.y, r, Color::new(1.0, 1.0, 1.0, a));
+        } else {
+            // A drop: a circle with a point on top.
+            let blue = Color::new(RAIN_BLUE.r, RAIN_BLUE.g, RAIN_BLUE.b, a);
+            draw_circle(p.x, p.y, r, blue);
+            draw_triangle(
+                p + vec2(-r * 0.9, -r * 0.4),
+                p + vec2(r * 0.9, -r * 0.4),
+                p - vec2(0.0, r * 2.0),
+                blue,
+            );
         }
     }
 }
@@ -1479,9 +1519,12 @@ impl Game {
             match Self::sim_end(sim) {
                 SimEnd::Won => draw_star(c, 16.0, 0.0, STAR),
                 SimEnd::Stuck => draw_answer(c, false),
-                SimEnd::Wet => {
-                    draw_rain_cloud(c + vec2(0.0, 10.0), 40.0, Weather::Raining, self.time)
-                }
+                SimEnd::Wet => draw_rain_cloud(
+                    c + vec2(0.0, 10.0),
+                    40.0,
+                    Weather::Raining(RAIN_WET),
+                    self.time,
+                ),
                 SimEnd::Short => draw_circle(c.x, c.y, 7.0, DISABLED),
             }
         }
@@ -3113,12 +3156,13 @@ impl Game {
             for x in 0..l.w {
                 if let Some(weather) = self.world.weather((x, y)) {
                     let c = self.cell_centre((x, y)).0;
-                    if weather == Weather::Raining {
+                    if weather.raining() {
                         let k = cell / 2.0;
                         let wet = Color::new(0.3, 0.5, 0.95, 0.25);
                         draw_rectangle(c.x - k, c.y - k, cell, cell, wet);
                     }
                     draw_rain_cloud(c, cell, weather, self.time);
+                    draw_rain_timeline(c, cell, weather);
                 }
             }
         }

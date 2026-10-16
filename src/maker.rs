@@ -11,9 +11,10 @@ use crate::{
     MAX_CELL, PANEL, PLAY_GREEN, Paint, REPEAT_TEAL, SHADOW, SKY, SLEEP_SLATE, STAR, STOP_RED,
     Screen, W, darker, dir_color, draw_answer, draw_arrow, draw_axe_badge, draw_bracket,
     draw_bridge, draw_door, draw_ice, draw_key, draw_label, draw_loop_icon, draw_mystery,
-    draw_no_sign, draw_number_icon, draw_play_icon, draw_question, draw_rain_cloud, draw_robot,
-    draw_rock, draw_shape, draw_sleep_icon, draw_star, draw_trash_icon, draw_tree, draw_until_icon,
-    draw_water, mix, progress, rounded_rect, upright_bridge,
+    draw_no_sign, draw_number_icon, draw_play_icon, draw_question, draw_rain_cloud,
+    draw_rain_timeline, draw_robot, draw_rock, draw_shape, draw_sleep_icon, draw_star,
+    draw_trash_icon, draw_tree, draw_until_icon, draw_water, mix, progress, rounded_rect,
+    upright_bridge,
 };
 
 /// Where the map maker is up to.
@@ -605,6 +606,7 @@ fn draw_tile(what: char, c: Vec2, cell: f32, time: f32, paint: Paint) {
             let n = what as u8 - b'0';
             // Bigger than in the game, as there's no robot to keep clear of.
             draw_rain_cloud(c + vec2(0.0, cell * 0.2), cell * 1.4, Weather::Dry(n), time);
+            draw_rain_timeline(c, cell, Weather::Dry(n));
         }
         'D' => draw_door(c, cell, 0.0),
         '*' => draw_star(c, cell * 0.3, 0.0, STAR),
