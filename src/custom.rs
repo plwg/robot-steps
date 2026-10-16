@@ -250,7 +250,7 @@ impl CustomMap {
                     Sense::Key => on_map('k'),
                     Sense::Door => on_map('D'),
                     Sense::Star | Sense::Grass | Sense::Edge => true,
-                    Sense::Wall | Sense::Rain => false,
+                    Sense::Wall => false,
                 })
                 .collect();
         }

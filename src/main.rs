@@ -352,15 +352,6 @@ fn draw_rain_cloud(c: Vec2, cell: f32, weather: Weather, time: f32) {
     }
 }
 
-/// "Wait while it's raining that way": an hourglass, a little rain cloud,
-/// and an arrow.
-fn draw_wait_while_icon(c: Vec2, size: f32, dir: Dir) {
-    draw_wait_icon(c - vec2(size * 0.22, 0.0), size * 0.75, WHITE);
-    let cloud = c + vec2(size * 0.18, size * 0.02);
-    draw_rain_cloud(cloud, size * 0.68, Weather::Raining, 0.3);
-    draw_arrow(c + vec2(size * 0.24, size * 0.26), size * 0.32, dir, WHITE);
-}
-
 /// An hourglass: wait a tick.
 fn draw_wait_icon(c: Vec2, size: f32, colour: Color) {
     let (w, h) = (size * 0.32, size * 0.36);
@@ -792,8 +783,6 @@ enum Button {
     Axe,
     /// Wait a tick.
     Wait,
-    /// Wait while it's raining (then pick which way to look).
-    WaitWhile,
     Repeat,
     Loop,
     /// Start an "if" block (then pick what it looks for, and which way), or
@@ -975,7 +964,7 @@ enum Kind {
 
 impl Kind {
     fn of(level: &Level) -> Kind {
-        if level.wait || level.wait_while {
+        if level.wait {
             Kind::Rain
         } else if level.numbers {
             Kind::Number
@@ -1475,8 +1464,7 @@ impl Game {
     fn check_time(&self) -> f32 {
         match self.trace.get(self.pc).map(|e| e.step) {
             Some(Step::Test {
-                sense: Sense::Wall | Sense::Rain,
-                ..
+                sense: Sense::Wall, ..
             }) => UNTIL_LOOK_TIME,
             _ => CHECK_TIME,
         }
@@ -1638,7 +1626,6 @@ impl Game {
             Button::Loop => self.level().loops,
             Button::If => !self.level().ifs.is_empty(),
             Button::Wait => self.level().wait,
-            Button::WaitWhile => self.level().wait_while,
             Button::Sense(sense) => self.picking() && self.level().ifs.contains(&sense),
             Button::Else => self.level().otherwise,
             Button::Until => self.level().until,
@@ -1651,11 +1638,9 @@ impl Game {
     fn enabled(&self, button: Button) -> bool {
         let editing = self.mode == Mode::Edit;
         match button {
-            Button::Arrow(_)
-            | Button::Axe
-            | Button::Wait
-            | Button::WaitWhile
-            | Button::Sense(_) => editing && self.can_place(),
+            Button::Arrow(_) | Button::Axe | Button::Wait | Button::Sense(_) => {
+                editing && self.can_place()
+            }
             // A loop can hold an "if", but an "if" can't hold a loop.
             Button::Loop => {
                 let open_if = open_if(self.prog()).is_some();
@@ -1709,15 +1694,11 @@ impl Game {
                         self.insert(Item::Until { dir });
                         return;
                     }
-                    Some(Button::WaitWhile) => {
-                        self.insert(Item::WaitWhile { dir });
-                        return;
-                    }
                     _ => Cmd::Move(dir),
                 };
                 self.insert(Item::Block(Block { cmd, times: 1 }));
             }
-            Button::Axe | Button::WaitWhile => {
+            Button::Axe => {
                 self.armed = (self.armed != Some(button)).then_some(button);
             }
             Button::Wait => {
@@ -2173,7 +2154,6 @@ impl Game {
         let tools: Vec<Button> = [
             Button::Axe,
             Button::Wait,
-            Button::WaitWhile,
             Button::Repeat,
             Button::Loop,
             Button::Until,
@@ -3265,7 +3245,6 @@ impl Game {
             Item::LoopStart { .. } | Item::Until { .. } | Item::LoopEnd => REPEAT_TEAL,
             Item::IfStart { .. } | Item::Else | Item::IfEnd => IF_LIME,
             Item::Call(..) => CALL_INK,
-            Item::WaitWhile { .. } => WAIT_SLATE,
             Item::Gap => SLOT_EMPTY,
         }
     }
@@ -3292,7 +3271,6 @@ impl Game {
             Item::LoopStart { .. } | Item::LoopEnd | Item::Else | Item::IfEnd | Item::Gap => {}
             Item::IfStart { sense, dir } => draw_if_icon(r.center(), r.w, sense, dir),
             Item::Until { dir } => draw_until_icon(r.center(), r.w, dir),
-            Item::WaitWhile { dir } => draw_wait_while_icon(r.center(), r.w, dir),
             Item::Call(f, _) => draw_shape(r.center(), r.w * 0.28, f),
         }
         if let Some(n) = badge {
@@ -3459,7 +3437,6 @@ impl Game {
                 Item::Call(_, n) if self.level().numbers => Some(n),
                 Item::LoopEnd
                 | Item::Until { .. }
-                | Item::WaitWhile { .. }
                 | Item::IfStart { .. }
                 | Item::Else
                 | Item::IfEnd
@@ -3507,7 +3484,7 @@ impl Game {
             let (colour, round) = match button {
                 Button::Arrow(dir) => (dir_color(dir), 18.0),
                 Button::Axe => (AXE_BROWN, 18.0),
-                Button::Wait | Button::WaitWhile => (WAIT_SLATE, 18.0),
+                Button::Wait => (WAIT_SLATE, 18.0),
                 Button::Repeat | Button::Loop => (REPEAT_TEAL, 18.0),
                 Button::If | Button::Sense(_) | Button::Else => (IF_LIME, 18.0),
                 Button::Until => (REPEAT_TEAL, 18.0),
@@ -3557,12 +3534,10 @@ impl Game {
                     Some(Button::Axe) => draw_chop_icon(c, size, dir),
                     Some(Button::Sense(sense)) => draw_if_icon(c, size, sense, dir),
                     Some(Button::Until) => draw_until_icon(c, size, dir),
-                    Some(Button::WaitWhile) => draw_wait_while_icon(c, size, dir),
                     _ => draw_arrow(c, size * 0.8, dir, WHITE),
                 },
                 Button::Axe => draw_axe_badge(c, size * 0.75),
                 Button::Wait => draw_wait_icon(c, size, WHITE),
-                Button::WaitWhile => draw_wait_while_icon(c, size, Dir::Right),
                 Button::Repeat => {
                     draw_loop_icon(c, half, WHITE);
                     // Show what the next tap will make the last block (or loop).
@@ -3855,7 +3830,7 @@ fn pair_ends(items: &[Item], i: usize) -> Option<(usize, Option<usize>)> {
         Item::IfStart { .. } | Item::IfEnd => {
             (|it| matches!(it, Item::IfStart { .. }), Item::IfEnd)
         }
-        Item::Block(_) | Item::Call(..) | Item::Else | Item::WaitWhile { .. } | Item::Gap => {
+        Item::Block(_) | Item::Call(..) | Item::Else | Item::Gap => {
             return None;
         }
     };
@@ -3874,7 +3849,6 @@ fn draw_sense(c: Vec2, size: f32, sense: Sense) {
         Sense::Tree => draw_tree(c - vec2(0.0, size * 0.12), size, 1.0, 0.0),
         Sense::Star => draw_star(c, size * 0.42, 0.0, STAR),
         Sense::Rock | Sense::Wall => draw_rock(c - vec2(0.0, size * 0.2), size * 1.1),
-        Sense::Rain => draw_rain_cloud(c + vec2(0.0, size * 0.25), size, Weather::Raining, 0.3),
         Sense::Ice => {
             let s = size * 0.8;
             draw_ice(c.x - s / 2.0, c.y - s / 2.0, s, false);
