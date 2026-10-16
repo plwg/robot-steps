@@ -82,9 +82,9 @@ play pulsing.
 Each win shows how many blocks the program used and how many turns
 (actions) it took, and each player's best for each level is kept from the
 first time they finish it: the fewest blocks and the fewest turns, each on
-its own. The trophy on the map shows the finished levels with the best
-blocks under each, to play again and beat. The game draws a big,
-easy-to-spot pointer.
+its own. A finished level shows them at the top, next to its number (a
+trophy, a block and a clock), to play it again and beat them. The game
+draws a big, easy-to-spot pointer.
 
 ## Making maps
 
