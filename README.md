@@ -4,7 +4,11 @@ A first coding game for young children (made for a 5-year-old). Tap arrows to
 build a program, press play, and watch the robot follow it to collect the
 stars. There's no reading required.
 
-![Level 47: the main program calls the ● and ▲ functions, and the robot is partway through ▲, chopping a tree](docs/screenshot.png)
+![The level map: finished levels have a star, and the player's robot waits on the next one](docs/map.png)
+
+| Choose a player | Playing a level |
+|---|---|
+| ![Three players, each with their own robot and progress](docs/players.png) | ![Level 48: the main program calls the ● and ▲ functions, and the robot is partway through ▲, chopping a tree](docs/level.png) |
 
 Across 48 levels it introduces:
 
