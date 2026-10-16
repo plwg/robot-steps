@@ -58,8 +58,7 @@ the program has (and each function, when there are functions). The buttons
 under the tiles choose the blocks it allows: the axe, repeat, loops, the two
 "if" blocks and the two functions. Some bring others along, as in the game's
 own levels: loops need repeat, and "if" blocks and functions need loops.
-Mystery clouds always come with the block that checks them (at most 8 per
-map).
+Mystery clouds always come with the block that checks them.
 
 Press play to try the map out. The arrow at the top left goes back to
 everyone's maps, where a map can be played, changed with the pencil, or

@@ -8,9 +8,6 @@ pub const MAX_MAPS: usize = 8;
 /// How big a map can be.
 pub const MAX_W: usize = 12;
 pub const MAX_H: usize = 7;
-/// The game tries every way the mystery clouds can turn out, so a map can't
-/// have too many.
-pub const MAX_CLOUDS: usize = 8;
 /// With functions, every strip is a single row with its name in front.
 const MAX_ROW_SLOTS: usize = 11;
 
@@ -97,12 +94,8 @@ impl CustomMap {
     }
 
     /// Paint one cell. There's only one robot, so painting it somewhere
-    /// moves it. Once there are `MAX_CLOUDS` clouds, no more can be added.
+    /// moves it.
     pub fn paint(&mut self, x: usize, y: usize, what: char) {
-        let clouds = self.cells.iter().filter(|&&c| c == '?').count();
-        if what == '?' && clouds >= MAX_CLOUDS {
-            return;
-        }
         if what == 'R' {
             for c in &mut self.cells {
                 if *c == 'R' {
@@ -345,17 +338,24 @@ mod tests {
     }
 
     #[test]
-    fn clouds_are_limited() {
+    fn a_map_full_of_clouds_still_plays() {
         let mut m = CustomMap::new();
         m.resize(MAX_W, MAX_H);
-        for x in 0..MAX_W {
-            m.paint(x, 0, '?');
+        for y in 0..MAX_H {
+            for x in 0..MAX_W {
+                m.paint(x, y, '?');
+            }
         }
-        assert_eq!(m.rows()[0].matches('?').count(), MAX_CLOUDS);
-        let saved = format(&[m]).replace("..", "??");
-        let clouds = parse(&saved)[0].rows().concat().matches('?').count();
-        assert_eq!(clouds, MAX_CLOUDS, "a saved file can't sneak more in");
-        assert_eq!(parse(&saved)[0].to_level().outcomes().len(), 254);
+        m.paint(0, 0, 'R');
+        m.paint(1, 0, '*');
+        let level = m.to_level();
+        assert_eq!(level.mysteries.len(), MAX_W * MAX_H - 2);
+        let mut toss = false;
+        let outcome = level.random_outcome(|| {
+            toss = !toss;
+            toss
+        });
+        assert_eq!(outcome.len(), level.mysteries.len());
     }
 
     #[test]

@@ -1283,9 +1283,8 @@ impl Game {
             self.act();
             return;
         }
-        let outcomes = self.level().outcomes();
-        let outcome = &outcomes[gen_range(0, outcomes.len())];
-        self.world = self.level().revealed(outcome);
+        let outcome = self.level().random_outcome(|| gen_range(0, 2) == 1);
+        self.world = self.level().revealed(&outcome);
         // A program runs the same way every time in the same world, so the
         // whole run can be worked out now that the clouds are gone.
         self.trace = level::expand(&self.strips, &self.world);

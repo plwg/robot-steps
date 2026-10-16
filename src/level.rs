@@ -764,9 +764,24 @@ impl Level {
         self.tiles.contains(&tile)
     }
 
-    /// Every way the mysteries can turn out (`true` = tree). With two or more
-    /// there's always at least one tree and one patch of grass, so a program
-    /// that guesses instead of checking can't get lucky every time.
+    /// One way the mysteries can turn out (`true` = tree), with `coin`
+    /// tossed for each. With two or more there's always at least one tree and
+    /// one patch of grass, so a program that guesses instead of checking
+    /// can't get lucky every time: if they all come out the same, toss again.
+    pub fn random_outcome(&self, mut coin: impl FnMut() -> bool) -> Vec<bool> {
+        let n = self.mysteries.len();
+        loop {
+            let outcome: Vec<bool> = (0..n).map(|_| coin()).collect();
+            if n < 2 || (outcome.contains(&true) && outcome.contains(&false)) {
+                return outcome;
+            }
+        }
+    }
+
+    /// Every way the mysteries can turn out, by the same rule as
+    /// `random_outcome`. That doubles with each cloud, so it's only for
+    /// checking the game's own levels (which have a few).
+    #[cfg(test)]
     pub fn outcomes(&self) -> Vec<Vec<bool>> {
         let n = self.mysteries.len();
         let all = (1u32 << n) - 1;
@@ -1554,6 +1569,15 @@ mod tests {
         assert_eq!(pair.outcomes().len(), 2);
         let single = Level::parse(&level(&["R?"]).with_check());
         assert_eq!(single.outcomes(), vec![vec![false], vec![true]]);
+        // Two trees can't happen, so it tosses again.
+        let mut tosses = [true, true, true, false].into_iter();
+        let mut coin = || tosses.next().unwrap_or(true);
+        assert_eq!(pair.random_outcome(&mut coin), [true, false]);
+        assert_eq!(
+            single.random_outcome(|| true),
+            [true],
+            "one cloud can be either"
+        );
     }
 
     #[test]
