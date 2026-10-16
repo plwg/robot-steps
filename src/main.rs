@@ -2233,14 +2233,11 @@ impl Game {
     }
 
     /// Where chapter `chapter` (from 1) sits on the map: an island in a grid,
-    /// in order along rows that wind back and forth, so each leads on to the
-    /// next one beside (or below) it.
+    /// in order like reading, each row left to right.
     fn island(&self, chapter: usize) -> Rect {
         let rows = self.chapters().div_ceil(ISLAND_COLS);
-        let (row, mut col) = ((chapter - 1) / ISLAND_COLS, (chapter - 1) % ISLAND_COLS);
-        if row % 2 == 1 {
-            col = ISLAND_COLS - 1 - col;
-        }
+        // In reading order: left to right, then the next row down.
+        let (row, col) = ((chapter - 1) / ISLAND_COLS, (chapter - 1) % ISLAND_COLS);
         let gap = 18.0;
         let (top, bottom) = (86.0, H - 14.0);
         let w = (W - 40.0 - gap * (ISLAND_COLS - 1) as f32) / ISLAND_COLS as f32;
@@ -2714,8 +2711,8 @@ impl Game {
     fn draw_map(&self) {
         let n = self.levels.len();
         let next = self.next_unfinished().filter(|_| !self.challenge);
-        // A path from each chapter's island to the next.
-        for ch in 1..self.chapters() {
+        // A path from each chapter's island to the next one along the row.
+        for ch in (1..self.chapters()).filter(|ch| ch % ISLAND_COLS != 0) {
             let (a, b) = (self.island(ch).center(), self.island(ch + 1).center());
             draw_line(a.x, a.y, b.x, b.y, 22.0, Color::new(1.0, 1.0, 1.0, 0.5));
         }
