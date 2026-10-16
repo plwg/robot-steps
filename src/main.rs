@@ -2565,8 +2565,7 @@ impl Game {
         if self.mode == Mode::Win && self.timer > 0.8 {
             self.draw_next_prompt();
         }
-        // The level's chapter and number, next to the map button, and the
-        // chapter's name.
+        // The level's chapter and number, next to the map button.
         let c = vec2(116.0, 36.0);
         let colour = self.colour_of(self.level());
         rounded_rect(c.x - 34.0, c.y - 22.0, 68.0, 44.0, 22.0, WHITE);
@@ -2583,9 +2582,6 @@ impl Game {
             draw_label_left(&text, vec2(c.x + 44.0, c.y), 24.0, INK);
         } else {
             draw_level_label(self.level(), c, 30.0, WHITE);
-            let name = level::chapter_name(self.level().chapter);
-            let w = measure_text(name, None, 26, 1.0).width;
-            draw_label(name, vec2(c.x + 46.0 + w / 2.0, c.y), 26.0, INK);
         }
     }
 
