@@ -985,25 +985,42 @@ impl Game {
         self.set_mode(Mode::Edit);
     }
 
-    /// If the robot's last move slid it along the ice, how many tiles.
-    fn slid(&self, from: Pos) -> Option<i32> {
+    /// How the move being made plays out, if there is one.
+    fn move_plan(&self) -> Option<MovePlan> {
+        let Some(Event::Moved { from, unlocked, .. }) = self.event else {
+            return None;
+        };
         let to = self.world.pos;
-        let n = (to.0 - from.0).abs() + (to.1 - from.1).abs();
-        (n > 1 || self.world.tile(to) == Some(Tile::Ice)).then_some(n)
+        // With a door to open, the robot first gets right up to it.
+        let (dx, dy) = self.facing.delta();
+        let via = if unlocked { (to.0 - dx, to.1 - dy) } else { to };
+        let n = (via.0 - from.0).abs() + (via.1 - from.1).abs();
+        let slide = n > 1 || (n == 1 && self.world.tile(via) == Some(Tile::Ice));
+        let drive = match n {
+            0 => 0.0,
+            // A slide takes longer the further it goes.
+            _ if slide => SLIDE_TIME * n as f32 + 0.2,
+            _ => STEP_TIME,
+        };
+        let (unlock, step) = if unlocked {
+            (UNLOCK_TIME, STEP_TIME)
+        } else {
+            (0.0, 0.0)
+        };
+        Some(MovePlan {
+            from,
+            via,
+            to,
+            slide,
+            drive,
+            unlock,
+            step,
+        })
     }
 
-    /// How long the move being made takes: a hop, or a slide (which takes
-    /// longer the further it goes), after opening a door if there is one.
     fn move_time(&self) -> f32 {
-        let Some(Event::Moved { from, unlocked, .. }) = self.event else {
-            return STEP_TIME;
-        };
-        let unlock = if unlocked { UNLOCK_TIME } else { 0.0 };
-        unlock
-            + match self.slid(from) {
-                Some(n) => SLIDE_TIME * n as f32 + 0.2,
-                None => STEP_TIME,
-            }
+        self.move_plan()
+            .map_or(STEP_TIME, |p| p.drive + p.unlock + p.step)
     }
 
     fn set_mode(&mut self, mode: Mode) {
@@ -1278,9 +1295,12 @@ impl Game {
             Ok(event) => {
                 self.event = Some(event);
                 self.sfx(match event {
-                    Event::Moved { unlocked: true, .. } => Sfx::Unlock,
-                    Event::Moved { from, .. } if self.slid(from).is_some() => Sfx::Slide,
-                    Event::Moved { .. } => Sfx::Step(cmd.dir()),
+                    // Unlocking straight away, or once the robot gets to the door.
+                    Event::Moved { .. } => match self.move_plan() {
+                        Some(p) if p.drive == 0.0 => Sfx::Unlock,
+                        Some(p) if p.slide => Sfx::Slide,
+                        _ => Sfx::Step(cmd.dir()),
+                    },
                     Event::Chopped(_) => Sfx::Chop,
                     Event::Checked { .. } | Event::Tested { .. } => Sfx::Look,
                 });
@@ -1353,6 +1373,15 @@ impl Game {
             && self.timer >= half
         {
             self.sfx(if yes { Sfx::Yes } else { Sfx::No });
+        }
+        if self.mode == Mode::Moving
+            && let Some(p) = self.move_plan()
+            && p.unlock > 0.0
+            && p.drive > 0.0
+            && before < p.drive
+            && self.timer >= p.drive
+        {
+            self.sfx(Sfx::Unlock);
         }
         match self.mode {
             Mode::Reveal if self.timer >= REVEAL_TIME => self.act(),
@@ -2279,10 +2308,10 @@ impl Game {
 
     /// How far open a door is: it swings open as the robot unlocks it.
     fn door_open(&self, at: Pos) -> f32 {
-        match (self.mode, self.event) {
-            (Mode::Moving, Some(Event::Moved { unlocked: true, .. })) if at == self.world.pos => {
-                let half = UNLOCK_TIME * 0.5;
-                ((self.timer - half) / half).clamp(0.0, 1.0)
+        match self.move_plan() {
+            Some(p) if self.mode == Mode::Moving && p.unlock > 0.0 && at == p.to => {
+                let half = p.unlock * 0.5;
+                ((self.timer - p.drive - half) / half).clamp(0.0, 1.0)
             }
             _ => 1.0,
         }
@@ -2293,18 +2322,29 @@ impl Game {
         let pos = pos_vec(self.world.pos);
         let look = dir_vec(self.facing);
         let (at, lift, face) = match (self.mode, self.event) {
-            (Mode::Moving, Some(Event::Moved { from, unlocked, .. })) => {
-                // Opening a door comes first, then the move.
-                let wait = if unlocked { UNLOCK_TIME } else { 0.0 };
-                let t = ((self.timer - wait) / (self.move_time() - wait)).clamp(0.0, 1.0);
-                if self.slid(from).is_some() {
-                    // Sliding: no hop, and slowing down at the end.
-                    let eased = t * (2.0 - t);
-                    (pos_vec(from).lerp(pos, eased), 0.0, Face::Wow)
+            (Mode::Moving, _) if let Some(p) = self.move_plan() => {
+                let t = self.timer;
+                let hop = |a: Pos, b: Pos, k: f32| {
+                    let eased = k * k * (3.0 - 2.0 * k);
+                    let lift = (k * PI).sin() * cell * 0.15;
+                    (pos_vec(a).lerp(pos_vec(b), eased), lift, Face::Happy)
+                };
+                if t < p.drive {
+                    let k = t / p.drive;
+                    if p.slide {
+                        // Sliding: no hop, and slowing down at the end.
+                        let eased = k * (2.0 - k);
+                        (pos_vec(p.from).lerp(pos_vec(p.via), eased), 0.0, Face::Wow)
+                    } else {
+                        hop(p.from, p.via, k)
+                    }
+                } else if t < p.drive + p.unlock {
+                    // Waiting at the door while the key opens it.
+                    (pos_vec(p.via), 0.0, Face::Happy)
+                } else if p.step > 0.0 {
+                    hop(p.via, p.to, ((t - p.drive - p.unlock) / p.step).min(1.0))
                 } else {
-                    let eased = t * t * (3.0 - 2.0 * t);
-                    let hop = (t * PI).sin() * cell * 0.15;
-                    (pos_vec(from).lerp(pos, eased), hop, Face::Happy)
+                    (pos, 0.0, Face::Happy)
                 }
             }
             (Mode::Chopping, _) => (pos, 0.0, Face::Happy),
@@ -2350,15 +2390,23 @@ impl Game {
         // The keys the robot is carrying, held up at its side. A key being
         // used flies off into the door's lock.
         let mut held = self.world.held as usize;
-        if let (Mode::Moving, Some(Event::Moved { key, unlocked, .. })) = (self.mode, self.event) {
+        if let (Mode::Moving, Some(Event::Moved { key, .. }), Some(p)) =
+            (self.mode, self.event, self.move_plan())
+        {
             if key {
                 held = held.saturating_sub(1);
             }
-            let fly = self.timer / (UNLOCK_TIME * 0.5);
-            if unlocked && fly < 1.0 {
+            // The key for the door is still carried until the robot gets there.
+            if p.unlock > 0.0 && self.timer < p.drive {
+                held += 1;
+            }
+            let fly = (self.timer - p.drive) / (p.unlock * 0.5);
+            if p.unlock > 0.0 && (0.0..1.0).contains(&fly) {
                 let door = self.cell_centre(self.world.pos).0 + vec2(0.0, cell * 0.06);
+                // From where it's held, at the robot's side.
+                let hand = c + vec2(cell * 0.46, -cell * 0.12);
                 let k = fly * fly;
-                draw_key(c.lerp(door, k), cell * 0.4 * (1.0 - k * 0.5), GOLD);
+                draw_key(hand.lerp(door, k), cell * 0.46 * (1.0 - k * 0.5), GOLD);
             }
         }
         for i in 0..held {
@@ -2739,6 +2787,20 @@ impl Game {
         draw_circle(c.x, c.y, r, PLAY_GREEN);
         draw_arrow(c, r * 1.4, Dir::Right, WHITE);
     }
+}
+
+/// A move, in up to three parts: driving (or sliding) from `from` to `via`,
+/// then opening the door there if there is one, then stepping through it to
+/// `to`.
+/// Each part's time is 0 if it doesn't happen.
+struct MovePlan {
+    from: Pos,
+    via: Pos,
+    to: Pos,
+    slide: bool,
+    drive: f32,
+    unlock: f32,
+    step: f32,
 }
 
 /// The sound on/off button, next to the full screen one on every screen.
