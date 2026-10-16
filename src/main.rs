@@ -9,7 +9,7 @@ mod progress;
 
 use std::f32::consts::PI;
 
-use level::{Block, Cmd, Dir, Event, Exec, Item, Level, MAX_TIMES, Pos, Tile, World};
+use level::{Block, Cmd, Dir, Event, Exec, Item, Level, Loc, MAX_TIMES, Pos, Tile, World};
 use macroquad::prelude::*;
 use macroquad::rand::gen_range;
 
@@ -52,6 +52,12 @@ const UNDO_YELLOW: Color = Color::new(0.95, 0.7, 0.1, 1.0);
 const AXE_BROWN: Color = Color::new(0.62, 0.4, 0.22, 1.0);
 const REPEAT_TEAL: Color = Color::new(0.1, 0.65, 0.65, 1.0);
 const CHECK_SLATE: Color = Color::new(0.33, 0.36, 0.55, 1.0);
+/// Each function's shape colour: ● and ▲.
+const FN_COLOURS: [Color; 2] = [
+    Color::new(1.0, 0.55, 0.3, 1.0),
+    Color::new(0.35, 0.85, 0.95, 1.0),
+];
+const CALL_INK: Color = Color::new(0.24, 0.27, 0.4, 1.0);
 const LOOP_BAND: Color = Color::new(0.72, 0.9, 0.9, 1.0);
 const CLOUD: Color = Color::new(0.97, 0.97, 1.0, 1.0);
 const WOOD: Color = Color::new(0.55, 0.35, 0.2, 1.0);
@@ -314,6 +320,21 @@ fn draw_axe(c: Vec2, size: f32, dir: Dir, swing: f32, handle: Color) {
     );
 }
 
+/// A function's name: a circle for function 1, a triangle for function 2.
+fn draw_shape(c: Vec2, r: f32, function: usize) {
+    let colour = FN_COLOURS[(function - 1) % FN_COLOURS.len()];
+    if function == 1 {
+        draw_circle(c.x, c.y, r, colour);
+    } else {
+        draw_triangle(
+            c + vec2(0.0, -r * 1.1),
+            c + vec2(-r * 1.05, r * 0.75),
+            c + vec2(r * 1.05, r * 0.75),
+            colour,
+        );
+    }
+}
+
 /// A square bracket filling part of `r`: `[` if `open`, otherwise `]`.
 fn draw_bracket(r: Rect, x: f32, open: bool, color: Color) {
     let t = r.w * 0.11;
@@ -505,6 +526,8 @@ enum Button {
     Check,
     Repeat,
     Loop,
+    /// Add a call to function 1 or 2.
+    Call(usize),
     Play,
     Undo,
     Clear,
@@ -512,13 +535,13 @@ enum Button {
 }
 
 /// Each fixed button with its centre and half-size. The tool buttons (axe,
-/// check, repeat) are laid out per level, as only some levels have them.
-const BUTTONS: [(Button, Vec2, f32); 8] = [
+/// check, repeat, loop, calls) and play are laid out per level, as only some
+/// levels have the tools.
+const BUTTONS: [(Button, Vec2, f32); 7] = [
     (Button::Arrow(Dir::Up), vec2(1256.0, 130.0), 42.0),
     (Button::Arrow(Dir::Left), vec2(1166.0, 215.0), 42.0),
     (Button::Arrow(Dir::Right), vec2(1346.0, 215.0), 42.0),
     (Button::Arrow(Dir::Down), vec2(1256.0, 300.0), 42.0),
-    (Button::Play, vec2(1256.0, 572.0), 64.0),
     (Button::Undo, vec2(1186.0, 728.0), 40.0),
     (Button::Clear, vec2(1326.0, 728.0), 40.0),
     (Button::Fullscreen, vec2(1386.0, 36.0), 22.0),
@@ -562,7 +585,10 @@ struct Game {
     levels: Vec<Level>,
     idx: usize,
     solved: Vec<bool>,
-    program: Vec<Item>,
+    /// The main program (strip 0), then each function.
+    strips: Vec<Vec<Item>>,
+    /// Which strip the buttons add to.
+    editing: usize,
     /// The axe or check button was tapped; the next arrow makes that block.
     armed: Option<Button>,
     world: World,
@@ -574,7 +600,7 @@ struct Game {
     /// What the robot is doing right now, for animation.
     event: Option<Event>,
     facing: Dir,
-    failed_step: Option<usize>,
+    failed_step: Option<Loc>,
     particles: Vec<Particle>,
     pressed: Option<(Button, f32)>,
     time: f32,
@@ -592,7 +618,8 @@ impl Game {
             levels,
             idx,
             solved,
-            program: Vec::new(),
+            strips: vec![Vec::new()],
+            editing: 0,
             armed: None,
             world,
             mode: Mode::Edit,
@@ -615,7 +642,8 @@ impl Game {
 
     fn load(&mut self, idx: usize) {
         self.idx = idx;
-        self.program.clear();
+        self.strips = vec![Vec::new(); 1 + self.level().functions];
+        self.editing = 0;
         self.particles.clear();
         self.armed = None;
         self.failed_step = None;
@@ -646,63 +674,59 @@ impl Game {
         )
     }
 
-    fn has_room(&self) -> bool {
-        self.program.len() < self.level().slots
+    /// The strip being edited.
+    fn prog(&self) -> &Vec<Item> {
+        &self.strips[self.editing]
     }
 
-    fn has_blocks(&self) -> bool {
-        self.program.iter().any(|i| matches!(i, Item::Block(_)))
+    fn prog_mut(&mut self) -> &mut Vec<Item> {
+        &mut self.strips[self.editing]
     }
 
-    /// The start of a loop that hasn't been closed yet.
-    fn open_loop(&self) -> Option<usize> {
-        let start = self
-            .program
-            .iter()
-            .rposition(|i| matches!(i, Item::LoopStart { .. }))?;
-        let closed = self.program[start..].contains(&Item::LoopEnd);
-        (!closed).then_some(start)
-    }
-
-    /// The two ends of the loop that slot `i` belongs to, if it's a loop end.
-    fn loop_ends(&self, i: usize) -> Option<(usize, Option<usize>)> {
-        let start = match self.program[i] {
-            Item::LoopStart { .. } => i,
-            Item::LoopEnd => self.program[..i]
-                .iter()
-                .rposition(|it| matches!(it, Item::LoopStart { .. }))?,
-            Item::Block(_) => return None,
-        };
-        let end = (start + 1..self.program.len()).find(|&j| self.program[j] == Item::LoopEnd);
-        Some((start, end))
-    }
-
-    /// How many times the last thing in the program runs: the last block, or
-    /// the whole loop if the program ends with one.
-    fn last_times(&mut self) -> Option<(&mut u8, u8)> {
-        let last = self.program.len().checked_sub(1)?;
-        let (start, _) = self.loop_ends(last).unwrap_or((last, None));
-        match &mut self.program[start] {
-            Item::Block(b) => Some((&mut b.times, 1)),
-            // Looping once isn't a loop, so loops go from 2.
-            Item::LoopStart { times } => Some((times, 2)),
-            Item::LoopEnd => None,
+    fn slots_of(&self, strip: usize) -> usize {
+        if strip == 0 {
+            self.level().slots
+        } else {
+            self.level().fn_slots
         }
+    }
+
+    fn has_room(&self) -> bool {
+        self.prog().len() < self.slots_of(self.editing)
+    }
+
+    /// Does the program do anything at all?
+    fn has_actions(&self) -> bool {
+        !level::expand(&self.strips).is_empty()
+    }
+
+    /// The slot whose count the repeat button changes: the last block, or the
+    /// start of the loop the strip ends with.
+    fn count_slot(&self) -> Option<usize> {
+        let items = self.prog();
+        let last = items.len().checked_sub(1)?;
+        let (start, _) = loop_ends(items, last).unwrap_or((last, None));
+        matches!(items[start], Item::Block(_) | Item::LoopStart { .. }).then_some(start)
     }
 
     /// What tapping repeat would change the last count to.
     fn next_times(&self) -> u8 {
-        let last = self.program.len().wrapping_sub(1);
-        let (start, _) = self
-            .program
-            .get(last)
-            .and_then(|_| self.loop_ends(last))
-            .unwrap_or((last, None));
-        match self.program.get(start) {
+        match self.count_slot().map(|i| self.prog()[i]) {
             Some(Item::Block(b)) => b.times % MAX_TIMES + 1,
-            Some(Item::LoopStart { times }) if *times >= MAX_TIMES => 2,
+            Some(Item::LoopStart { times }) if times >= MAX_TIMES => 2,
             Some(Item::LoopStart { times }) => times + 1,
             _ => 2,
+        }
+    }
+
+    /// Set the last count. Looping once isn't a loop, so loops go from 2.
+    fn set_times(&mut self, n: u8) {
+        if let Some(i) = self.count_slot() {
+            match &mut self.prog_mut()[i] {
+                Item::Block(b) => b.times = n,
+                Item::LoopStart { times } => *times = n.max(2),
+                _ => {}
+            }
         }
     }
 
@@ -712,6 +736,7 @@ impl Game {
             Button::Check => self.level().check,
             Button::Repeat => self.level().repeat,
             Button::Loop => self.level().loops,
+            Button::Call(f) => f <= self.level().functions,
             _ => true,
         }
     }
@@ -720,10 +745,13 @@ impl Game {
         let editing = self.mode == Mode::Edit;
         match button {
             Button::Arrow(_) | Button::Axe | Button::Check => editing && self.has_room(),
-            Button::Loop => editing && (self.has_room() || self.open_loop().is_some()),
-            Button::Repeat | Button::Clear => editing && !self.program.is_empty(),
-            Button::Undo => editing && (self.armed.is_some() || !self.program.is_empty()),
-            Button::Play => self.running() || (editing && self.has_blocks()),
+            Button::Loop => editing && (self.has_room() || open_loop(self.prog()).is_some()),
+            // Calls only go in the main program.
+            Button::Call(_) => editing && self.editing == 0 && self.has_room(),
+            Button::Repeat => editing && self.count_slot().is_some(),
+            Button::Clear => editing && !self.prog().is_empty(),
+            Button::Undo => editing && (self.armed.is_some() || !self.prog().is_empty()),
+            Button::Play => self.running() || (editing && self.has_actions()),
             Button::Fullscreen => true,
         }
     }
@@ -743,39 +771,38 @@ impl Game {
                     Some(Button::Check) => Cmd::IfTreeChop(dir),
                     _ => Cmd::Move(dir),
                 };
-                self.program.push(Item::Block(Block { cmd, times: 1 }));
+                self.prog_mut().push(Item::Block(Block { cmd, times: 1 }));
             }
             Button::Axe | Button::Check => {
                 self.armed = (self.armed != Some(button)).then_some(button);
             }
-            Button::Repeat => {
-                let next = self.next_times();
-                if let Some((times, _)) = self.last_times() {
-                    *times = next;
-                }
-            }
-            Button::Loop => match self.open_loop() {
+            Button::Repeat => self.set_times(self.next_times()),
+            Button::Loop => match open_loop(self.prog()) {
                 // Tapped again straight away: never mind.
-                Some(start) if start + 1 == self.program.len() => {
-                    self.program.pop();
+                Some(start) if start + 1 == self.prog().len() => {
+                    self.prog_mut().pop();
                 }
-                Some(_) if self.has_room() => self.program.push(Item::LoopEnd),
+                Some(_) if self.has_room() => self.prog_mut().push(Item::LoopEnd),
                 Some(_) => {}
-                None => self.program.push(Item::LoopStart { times: 2 }),
+                None => self.prog_mut().push(Item::LoopStart { times: 2 }),
             },
+            Button::Call(f) => {
+                self.armed = None;
+                self.prog_mut().push(Item::Call(f));
+            }
             Button::Undo if self.armed.is_some() => self.armed = None,
             Button::Undo => {
-                self.program.pop();
+                self.prog_mut().pop();
             }
             Button::Clear => {
-                self.program.clear();
+                self.prog_mut().clear();
                 self.armed = None;
             }
             Button::Play if self.running() => self.reset_robot(),
             Button::Play => {
                 self.armed = None;
                 self.reset_robot();
-                self.trace = level::expand(&self.program);
+                self.trace = level::expand(&self.strips);
                 self.start_run();
             }
             Button::Fullscreen => {
@@ -820,7 +847,7 @@ impl Game {
                 });
             }
             Err(()) => {
-                self.failed_step = Some(exec.item);
+                self.failed_step = Some(exec.at);
                 self.set_mode(Mode::Bump);
             }
         }
@@ -897,27 +924,13 @@ impl Game {
             }
             return;
         }
-        // Tap a block in the program to take it out. Tapping either end of a
-        // loop takes out the loop but keeps the blocks inside.
-        if self.mode == Mode::Edit
-            && let Some(i) = (0..self.program.len()).find(|&i| self.slot_rect(i).contains(m))
-        {
-            match self.loop_ends(i) {
-                Some((start, end)) => {
-                    if let Some(end) = end {
-                        self.program.remove(end);
-                    }
-                    self.program.remove(start);
-                }
-                None => {
-                    self.program.remove(i);
-                }
-            }
-            self.failed_step = None;
+        if self.mode == Mode::Edit && self.click_strip(m) {
             return;
         }
         // Tap a level dot to jump there.
-        if let Some(i) = (0..self.levels.len()).find(|&i| (m - self.level_dot(i)).length() < 20.0) {
+        if let Some(i) = (0..self.levels.len())
+            .find(|&i| (m - self.level_dot(i)).length() < self.dot_spacing() / 2.0)
+        {
             self.load(i);
         }
     }
@@ -945,6 +958,8 @@ impl Game {
             (KeyCode::Q, Button::Check),
             (KeyCode::R, Button::Repeat),
             (KeyCode::L, Button::Loop),
+            (KeyCode::F, Button::Call(1)),
+            (KeyCode::G, Button::Call(2)),
             (KeyCode::Space, Button::Play),
             (KeyCode::Enter, Button::Play),
             (KeyCode::Backspace, Button::Undo),
@@ -960,45 +975,103 @@ impl Game {
             && n >= 1
             && self.visible(Button::Repeat)
             && self.enabled(Button::Repeat)
-            && let Some((times, min)) = self.last_times()
         {
-            *times = (n as u8).max(min);
+            self.set_times(n as u8);
+        }
+        // Tab moves between the main program and the functions.
+        if is_key_pressed(KeyCode::Tab) && self.mode == Mode::Edit {
+            self.editing = (self.editing + 1) % self.strips.len();
         }
     }
 
     // --- geometry -------------------------------------------------------
 
+    /// The tool buttons this level has: one row of up to four, or two rows.
+    fn tools(&self) -> Vec<Vec<Button>> {
+        let tools: Vec<Button> = [
+            Button::Axe,
+            Button::Check,
+            Button::Repeat,
+            Button::Loop,
+            Button::Call(1),
+            Button::Call(2),
+        ]
+        .into_iter()
+        .filter(|&b| self.visible(b))
+        .collect();
+        if tools.len() <= 4 {
+            vec![tools]
+        } else {
+            let (a, b) = tools.split_at(tools.len().div_ceil(2));
+            vec![a.to_vec(), b.to_vec()]
+        }
+    }
+
+    /// The bottom of the panel that holds the arrows and tools.
+    fn panel_bottom(&self) -> f32 {
+        match self.tools().len() {
+            _ if self.tools()[0].is_empty() => 370.0,
+            1 => 470.0,
+            _ => 515.0,
+        }
+    }
+
     /// Every button for this level, with its centre and half-size.
     fn buttons(&self) -> Vec<(Button, Vec2, f32)> {
-        let tools: Vec<Button> = [Button::Axe, Button::Check, Button::Repeat, Button::Loop]
-            .into_iter()
-            .filter(|&b| self.visible(b))
-            .collect();
-        let middle = (tools.len() as f32 - 1.0) / 2.0;
-        let spacing = (272.0 / tools.len() as f32).min(92.0);
-        let half = (spacing * 0.45).min(40.0);
-        let tool_buttons = tools.into_iter().enumerate().map(move |(i, b)| {
-            let x = 1256.0 + (i as f32 - middle) * spacing;
-            (b, vec2(x, 412.0), half)
-        });
-        BUTTONS.into_iter().chain(tool_buttons).collect()
+        let rows = self.tools();
+        let (ys, max_half): (&[f32], f32) = if rows.len() == 1 {
+            (&[412.0], 40.0)
+        } else {
+            (&[388.0, 472.0], 35.0)
+        };
+        let widest = rows.iter().map(Vec::len).max().unwrap_or(1).max(1);
+        let spacing = (272.0 / widest as f32).min(92.0);
+        let half = (spacing * 0.45).min(max_half);
+        let mut buttons = BUTTONS.to_vec();
+        for (row, &y) in rows.iter().zip(ys) {
+            let middle = (row.len() as f32 - 1.0) / 2.0;
+            for (i, &b) in row.iter().enumerate() {
+                buttons.push((b, vec2(1256.0 + (i as f32 - middle) * spacing, y), half));
+            }
+        }
+        let play = if rows.len() == 1 {
+            (vec2(1256.0, 572.0), 64.0)
+        } else {
+            (vec2(1256.0, 602.0), 56.0)
+        };
+        buttons.push((Button::Play, play.0, play.1));
+        buttons
     }
 
     fn level_dot(&self, i: usize) -> Vec2 {
-        let spacing = (1270.0 / (self.levels.len() - 1) as f32).min(52.0);
-        vec2(40.0 + i as f32 * spacing, 36.0)
+        vec2(40.0 + i as f32 * self.dot_spacing(), 36.0)
+    }
+
+    fn dot_spacing(&self) -> f32 {
+        (1270.0 / (self.levels.len() - 1) as f32).min(52.0)
+    }
+
+    /// Where the map goes. Levels with functions have more program strips,
+    /// so the map gets a little shorter.
+    fn board(&self) -> Rect {
+        if self.level().functions == 0 {
+            return BOARD;
+        }
+        let top = self.slot_rect(0, 0).y - 12.0;
+        Rect::new(BOARD.x, BOARD.y, BOARD.w, top - 30.0 - BOARD.y)
     }
 
     fn cell_size(&self) -> f32 {
         let l = self.level();
-        (BOARD.w / l.w as f32)
-            .min(BOARD.h / l.h as f32)
+        let board = self.board();
+        (board.w / l.w as f32)
+            .min(board.h / l.h as f32)
             .min(MAX_CELL)
     }
 
     fn grid_origin(&self) -> Vec2 {
         let l = self.level();
-        BOARD.center() - vec2(l.w as f32, l.h as f32) * self.cell_size() / 2.0
+        self.board().center() - vec2(l.w as f32, l.h as f32) * self.cell_size() / 2.0
     }
 
     fn cell_centre_f(&self, p: Vec2) -> Vec2 {
@@ -1009,20 +1082,82 @@ impl Game {
         (self.cell_centre_f(pos_vec(p)), self.cell_size())
     }
 
-    fn strip_cols(&self) -> usize {
-        self.level().slots.min(SLOTS_PER_ROW)
+    fn strip_cols(&self, strip: usize) -> usize {
+        self.slots_of(strip).min(SLOTS_PER_ROW)
     }
 
-    fn slot_rect(&self, i: usize) -> Rect {
-        let cols = self.strip_cols();
-        let width = cols as f32 * (SLOT + SLOT_GAP) - SLOT_GAP;
-        let x0 = BOARD.center().x - width / 2.0;
+    /// With functions, every strip is one row with its name (a shape, or ▶
+    /// for the main program) in front, stacked at the bottom of the screen.
+    fn labelled(&self) -> bool {
+        self.level().functions > 0
+    }
+
+    /// The left edge and top of a strip's first slot (or its label).
+    fn strip_origin(&self, strip: usize) -> Vec2 {
+        let step = SLOT + SLOT_GAP;
+        if !self.labelled() {
+            let width = self.strip_cols(0) as f32 * step - SLOT_GAP;
+            return vec2(BOARD.center().x - width / 2.0, STRIP_Y);
+        }
+        let strips = self.strips.len();
+        let widest = (0..strips).map(|s| self.slots_of(s) + 1).max().unwrap_or(1);
+        let x = BOARD.center().x - (widest as f32 * step - SLOT_GAP) / 2.0;
+        // Each strip is a panel (one row plus padding) with a gap between.
+        let panel = SLOT + 24.0;
+        let gap = 14.0;
+        let total = strips as f32 * panel + (strips - 1) as f32 * gap;
+        let top = H - 8.0 - total;
+        vec2(x, top + 12.0 + strip as f32 * (panel + gap))
+    }
+
+    fn label_rect(&self, strip: usize) -> Rect {
+        let o = self.strip_origin(strip);
+        Rect::new(o.x, o.y, SLOT, SLOT)
+    }
+
+    fn slot_rect(&self, strip: usize, i: usize) -> Rect {
+        let cols = self.strip_cols(strip);
+        let step = SLOT + SLOT_GAP;
+        let o = self.strip_origin(strip);
+        let x0 = if self.labelled() { o.x + step } else { o.x };
         Rect::new(
-            x0 + (i % cols) as f32 * (SLOT + SLOT_GAP),
-            STRIP_Y + (i / cols) as f32 * (SLOT + SLOT_GAP),
+            x0 + (i % cols) as f32 * step,
+            o.y + (i / cols) as f32 * step,
             SLOT,
             SLOT,
         )
+    }
+
+    /// A tap on a strip picks it for editing, and a tap on a block takes it
+    /// out (tapping either end of a loop takes out the loop, but keeps the
+    /// blocks inside). Returns whether the tap landed on a strip.
+    fn click_strip(&mut self, m: Vec2) -> bool {
+        for strip in 0..self.strips.len() {
+            if self.labelled() && self.label_rect(strip).contains(m) {
+                self.editing = strip;
+                return true;
+            }
+            let hit = (0..self.slots_of(strip)).find(|&i| self.slot_rect(strip, i).contains(m));
+            let Some(i) = hit else { continue };
+            self.editing = strip;
+            let items = &mut self.strips[strip];
+            if i < items.len() {
+                match loop_ends(items, i) {
+                    Some((start, end)) => {
+                        if let Some(end) = end {
+                            items.remove(end);
+                        }
+                        items.remove(start);
+                    }
+                    None => {
+                        items.remove(i);
+                    }
+                }
+                self.failed_step = None;
+            }
+            return true;
+        }
+        false
     }
 
     // --- effects --------------------------------------------------------
@@ -1088,6 +1223,8 @@ impl Game {
     }
 
     fn draw_level_dots(&self) {
+        // Shrink the dots a little when there are lots of levels.
+        let k = (self.dot_spacing() / 40.0).min(1.0);
         for i in 0..self.levels.len() {
             let c = self.level_dot(i);
             if i == self.idx {
@@ -1095,9 +1232,9 @@ impl Game {
                 draw_circle(c.x, c.y, 19.0, dir_color(Dir::Up));
                 draw_label(&format!("{}", i + 1), c, 26.0, WHITE);
             } else if self.solved[i] {
-                draw_star(c, 17.0, 0.0, STAR);
+                draw_star(c, 17.0 * k, 0.0, STAR);
             } else {
-                draw_circle(c.x, c.y, 11.0, Color::new(1.0, 1.0, 1.0, 0.7));
+                draw_circle(c.x, c.y, 11.0 * k, Color::new(1.0, 1.0, 1.0, 0.7));
             }
         }
     }
@@ -1249,7 +1386,7 @@ impl Game {
         let failed_chop = self.mode == Mode::Bump
             && self
                 .failed_step
-                .and_then(|i| self.program.get(i))
+                .and_then(|(s, i)| self.strips[s].get(i))
                 .is_some_and(|it| {
                     matches!(
                         it,
@@ -1283,6 +1420,7 @@ impl Game {
         match item {
             Item::Block(b) => Self::block_colour(b.cmd),
             Item::LoopStart { .. } | Item::LoopEnd => REPEAT_TEAL,
+            Item::Call(_) => CALL_INK,
         }
     }
 
@@ -1300,6 +1438,7 @@ impl Game {
                 draw_loop_icon(r.center() + vec2(r.w * 0.14, 0.0), r.w * 0.42, WHITE);
             }
             Item::LoopEnd => draw_bracket(r, r.x + r.w * 0.6, false, WHITE),
+            Item::Call(f) => draw_shape(r.center(), r.w * 0.28, f),
         }
         if let Some(n) = badge {
             let c = vec2(r.x + r.w - 4.0, r.y + 4.0);
@@ -1310,48 +1449,81 @@ impl Game {
     }
 
     fn draw_program(&self) {
-        let slots = self.level().slots;
-        let first = self.slot_rect(0);
-        let last = self.slot_rect(slots - 1);
-        let right = self.slot_rect(self.strip_cols() - 1);
-        rounded_rect(
-            first.x - 12.0,
-            first.y - 12.0,
+        for strip in 0..self.strips.len() {
+            self.draw_strip(strip);
+        }
+    }
+
+    fn draw_strip(&self, strip: usize) {
+        let items = &self.strips[strip];
+        let slots = self.slots_of(strip);
+        let first = if self.labelled() {
+            self.label_rect(strip)
+        } else {
+            self.slot_rect(strip, 0)
+        };
+        let last = self.slot_rect(strip, slots - 1);
+        let right = self.slot_rect(strip, self.strip_cols(strip) - 1);
+        let (x, y) = (first.x - 12.0, first.y - 12.0);
+        let (w, h) = (
             right.right() - first.x + 24.0,
             last.bottom() - first.y + 24.0,
-            20.0,
-            PANEL,
         );
+        // The strip being edited has a yellow outline (when there's a choice).
+        if self.labelled() && strip == self.editing && self.mode == Mode::Edit {
+            rounded_rect(x - 5.0, y - 5.0, w + 10.0, h + 10.0, 25.0, STAR);
+        }
+        rounded_rect(x, y, w, h, 20.0, PANEL);
+        if self.labelled() {
+            let r = self.label_rect(strip);
+            if strip == 0 {
+                draw_circle(r.center().x, r.center().y, r.w * 0.42, PLAY_GREEN);
+                draw_play_icon(r.center() + vec2(r.w * 0.04, 0.0), r.w * 0.36);
+            } else {
+                draw_shape(r.center(), r.w * 0.36, strip);
+            }
+        }
+
         let running = matches!(
             self.mode,
             Mode::Moving | Mode::Checking | Mode::Chopping | Mode::Bump
         );
         let current = self.trace.get(self.pc).filter(|_| running);
+        // Where this strip has got to: the running slot here, or for the main
+        // program, the call that's running a function.
+        let at = current.and_then(|e| match (strip, e.call) {
+            (0, Some(call)) => Some(call),
+            _ => (e.at.0 == strip).then_some(e.at.1),
+        });
 
         // A band behind each loop shows which blocks are inside it.
-        for (i, item) in self.program.iter().enumerate() {
+        for (i, item) in items.iter().enumerate() {
             if matches!(item, Item::LoopStart { .. }) {
-                let end = self.loop_ends(i).and_then(|(_, e)| e);
-                self.draw_loop_band(i, end.unwrap_or(self.program.len() - 1));
+                let end = loop_ends(items, i).and_then(|(_, e)| e);
+                self.draw_loop_band(strip, i, end.unwrap_or(items.len() - 1));
             }
         }
 
         for i in 0..slots {
-            let mut r = self.slot_rect(i);
-            let Some(&item) = self.program.get(i) else {
-                if !self.loop_band_covers(i) {
+            let mut r = self.slot_rect(strip, i);
+            let Some(&item) = items.get(i) else {
+                if !self.loop_band_covers(strip, i) {
                     rounded_rect(r.x, r.y, r.w, r.h, 12.0, SLOT_EMPTY);
                 }
                 continue;
             };
             // How many more times this loop will run, if it's running now.
             let looping = current
-                .and_then(|e| e.in_loop)
+                .and_then(|e| match strip {
+                    0 => e.main_loop,
+                    _ if e.at.0 == strip => e.fn_loop,
+                    _ => None,
+                })
                 .filter(|&(start, _)| start == i)
                 .map(|(_, left)| left);
-            let active = current.is_some_and(|e| e.item == i);
-            let failed = self.failed_step == Some(i);
-            let done = current.is_some_and(|e| e.item > i) && looping.is_none();
+            let active = at == Some(i);
+            let failed = self.failed_step == Some((strip, i));
+            let done = at.is_some_and(|a| a > i) && looping.is_none();
             if active {
                 r.y -= 6.0;
             }
@@ -1367,35 +1539,38 @@ impl Game {
                 colour = mix(colour, PANEL, 0.55);
             }
             // While a repeated block or loop runs, its number counts down.
+            let running_block = active && current.is_some_and(|e| e.at == (strip, i));
             let badge = match item {
-                Item::Block(b) if active => current.map(|e| e.left).filter(|_| b.times > 1),
+                Item::Block(b) if running_block => current.map(|e| e.left).filter(|_| b.times > 1),
                 Item::Block(b) => (b.times > 1).then_some(b.times),
                 Item::LoopStart { times } => looping.or(Some(times)),
-                Item::LoopEnd => None,
+                Item::LoopEnd | Item::Call(_) => None,
             };
             Self::draw_item(r, item, colour, badge);
         }
     }
 
     /// Is empty slot `i` inside a loop that's still open?
-    fn loop_band_covers(&self, i: usize) -> bool {
-        self.open_loop().is_some() && i == self.program.len()
+    fn loop_band_covers(&self, strip: usize, i: usize) -> bool {
+        let items = &self.strips[strip];
+        open_loop(items).is_some() && i == items.len()
     }
 
     /// Shade the slots from `start` to `end`, one row at a time. An open loop
     /// also takes in the next empty slot, where new blocks will go.
-    fn draw_loop_band(&self, start: usize, end: usize) {
-        let open = self.program.get(end) != Some(&Item::LoopEnd);
+    fn draw_loop_band(&self, strip: usize, start: usize, end: usize) {
+        let items = &self.strips[strip];
+        let open = items.get(end) != Some(&Item::LoopEnd);
         let end = if open {
-            (end + 1).min(self.level().slots - 1)
+            (end + 1).min(self.slots_of(strip) - 1)
         } else {
             end
         };
-        let cols = self.strip_cols();
+        let cols = self.strip_cols(strip);
         let mut i = start;
         while i <= end {
             let row_end = end.min((i / cols + 1) * cols - 1);
-            let (a, b) = (self.slot_rect(i), self.slot_rect(row_end));
+            let (a, b) = (self.slot_rect(strip, i), self.slot_rect(strip, row_end));
             rounded_rect(
                 a.x - 6.0,
                 a.y - 6.0,
@@ -1406,20 +1581,16 @@ impl Game {
             );
             i = row_end + 1;
         }
-        if open {
-            let r = self.slot_rect(end);
-            if end >= self.program.len() {
-                let pulse = (self.time * 4.0).sin() * 0.5 + 0.5;
-                let c = mix(LOOP_BAND, REPEAT_TEAL, 0.3 + pulse * 0.3);
-                rounded_rect(r.x, r.y, r.w, r.h, 12.0, c);
-            }
+        if open && end >= items.len() {
+            let r = self.slot_rect(strip, end);
+            let pulse = (self.time * 4.0).sin() * 0.5 + 0.5;
+            let c = mix(LOOP_BAND, REPEAT_TEAL, 0.3 + pulse * 0.3);
+            rounded_rect(r.x, r.y, r.w, r.h, 12.0, c);
         }
     }
 
     fn draw_buttons(&self) {
-        let tools = self.level().chop || self.level().repeat;
-        let panel_h = if tools { 400.0 } else { 300.0 };
-        rounded_rect(1110.0, 70.0, 292.0, panel_h, 30.0, PANEL);
+        rounded_rect(1110.0, 70.0, 292.0, self.panel_bottom() - 70.0, 30.0, PANEL);
         for (button, c, half) in self.buttons() {
             if !self.visible(button) {
                 continue;
@@ -1435,6 +1606,7 @@ impl Game {
                 Button::Axe => (AXE_BROWN, 18.0),
                 Button::Check => (CHECK_SLATE, 18.0),
                 Button::Repeat | Button::Loop => (REPEAT_TEAL, 18.0),
+                Button::Call(_) => (CALL_INK, 18.0),
                 Button::Play if self.running() => (STOP_RED, half),
                 Button::Play => (PLAY_GREEN, half),
                 Button::Undo => (UNDO_YELLOW, 18.0),
@@ -1445,7 +1617,7 @@ impl Game {
             let size = half * 2.0;
             // An armed tool glows to say "now pick which way", and an open
             // loop glows until it's closed.
-            let open_loop = button == Button::Loop && self.open_loop().is_some();
+            let open_loop = button == Button::Loop && open_loop(self.prog()).is_some();
             if self.armed == Some(button) || open_loop {
                 let g = 6.0 + ((self.time * 6.0).sin() * 0.5 + 0.5) * 4.0;
                 rounded_rect(
@@ -1484,6 +1656,7 @@ impl Game {
                     // Show what the next tap will make the last block (or loop).
                     draw_label(&format!("{}", self.next_times()), c, 28.0, WHITE);
                 }
+                Button::Call(f) => draw_shape(c, half * 0.55, f),
                 Button::Loop => {
                     let r = Rect::new(c.x - half, c.y - half, size, size);
                     // While a loop is open, the button shows how to close it.
@@ -1520,13 +1693,35 @@ impl Game {
     }
 
     fn draw_next_prompt(&self) {
-        let c = BOARD.center();
+        let c = self.board().center();
         let pulse = 1.0 + (self.time * 5.0).sin() * 0.06;
         let r = 70.0 * pulse;
         draw_circle(c.x, c.y + 6.0, r, darker(PLAY_GREEN, 0.7));
         draw_circle(c.x, c.y, r, PLAY_GREEN);
         draw_arrow(c, r * 1.4, Dir::Right, WHITE);
     }
+}
+
+/// The start of a loop in `items` that hasn't been closed yet.
+fn open_loop(items: &[Item]) -> Option<usize> {
+    let start = items
+        .iter()
+        .rposition(|i| matches!(i, Item::LoopStart { .. }))?;
+    let closed = items[start..].contains(&Item::LoopEnd);
+    (!closed).then_some(start)
+}
+
+/// The two ends of the loop that slot `i` belongs to, if it's a loop end.
+fn loop_ends(items: &[Item], i: usize) -> Option<(usize, Option<usize>)> {
+    let start = match items[i] {
+        Item::LoopStart { .. } => i,
+        Item::LoopEnd => items[..i]
+            .iter()
+            .rposition(|it| matches!(it, Item::LoopStart { .. }))?,
+        Item::Block(_) | Item::Call(_) => return None,
+    };
+    let end = (start + 1..items.len()).find(|&j| items[j] == Item::LoopEnd);
+    Some((start, end))
 }
 
 /// "Chop that way": an arrow with a little axe tucked in the corner.

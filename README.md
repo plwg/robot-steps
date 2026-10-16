@@ -6,7 +6,7 @@ stars. There's no reading required.
 
 ![The robot checking for a tree inside a loop, on level 40](docs/screenshot.png)
 
-Across 40 levels it introduces:
+Across 44 levels it introduces:
 
 - **Sequences:** up, down, left and right, in order
 - **Debugging:** when the robot bumps into something, the step that went wrong
@@ -16,6 +16,8 @@ Across 40 levels it introduces:
 - **Conditionals:** mystery clouds become a tree or grass each run, so the
   robot has to check before it chops
 - **Loops:** repeat a whole group of blocks
+- **Functions:** extra strips of blocks named with a shape (● and ▲) that the
+  main program calls whenever it needs them
 
 Finished levels are saved, and the game carries on from the first unfinished one.
 
@@ -52,6 +54,8 @@ Under WSL the game runs on the GPU, but WSL caps full screen at 4K to about
 | Q, then an arrow | If there's a tree that way, chop it |
 | R / 2-9 | Repeat the last block (or loop) |
 | L | Open or close a loop |
+| F / G | Call function ● / ▲ |
+| Tab | Switch between the main program and the functions |
 | Space / Enter | Play or stop |
 | Backspace / Delete | Undo / clear |
 | F11 | Toggle full screen |

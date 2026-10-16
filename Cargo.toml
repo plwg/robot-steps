@@ -5,3 +5,7 @@ edition = "2024"
 
 [dependencies]
 macroquad = { version = "0.4", default-features = false }
+
+# The level tests search a lot of programs; optimise them so they stay quick.
+[profile.test]
+opt-level = 2
