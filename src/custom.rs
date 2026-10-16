@@ -34,6 +34,8 @@ pub enum Tool {
     /// The "if" block. It can look for anything on the map, or the edge.
     If,
     Else,
+    /// "Not", for the "if": "if there's no...".
+    Not,
     /// The first function (●), and the second (▲).
     Fn1,
     Fn2,
@@ -44,7 +46,7 @@ pub enum Tool {
 impl Tool {
     /// In the order they're shown, and saved: each comes after the blocks it
     /// needs.
-    pub const ALL: [Tool; 10] = [
+    pub const ALL: [Tool; 11] = [
         Tool::Axe,
         Tool::Wait,
         Tool::Repeat,
@@ -52,6 +54,7 @@ impl Tool {
         Tool::Until,
         Tool::If,
         Tool::Else,
+        Tool::Not,
         Tool::Fn1,
         Tool::Fn2,
         Tool::Numbers,
@@ -66,6 +69,7 @@ impl Tool {
             Tool::Else => "else",
             Tool::Numbers => "numbers",
             Tool::Wait => "wait",
+            Tool::Not => "not",
             Tool::If => "if",
             Tool::Fn1 => "fn1",
             Tool::Fn2 => "fn2",
@@ -91,6 +95,7 @@ pub struct CustomMap {
     functions: usize,
     numbers: bool,
     wait: bool,
+    not: bool,
 }
 
 impl CustomMap {
@@ -111,6 +116,7 @@ impl CustomMap {
             functions: 0,
             numbers: false,
             wait: false,
+            not: false,
         };
         map.paint(0, 1, 'R');
         map.paint(5, 2, '*');
@@ -172,6 +178,7 @@ impl CustomMap {
             Tool::Fn2 => self.functions >= 2,
             Tool::Numbers => self.numbers,
             Tool::Wait => self.wait,
+            Tool::Not => self.not,
         }
     }
 
@@ -196,9 +203,10 @@ impl CustomMap {
             Tool::Fn2 => self.functions = if on { 2 } else { 1 },
             Tool::Numbers => self.numbers = on,
             Tool::Wait => self.wait = on,
+            Tool::Not => self.not = on,
         }
         if on {
-            self.ifs |= self.otherwise;
+            self.ifs |= self.otherwise || self.not;
             if self.numbers && self.functions == 0 {
                 self.functions = 1;
             }
@@ -211,6 +219,7 @@ impl CustomMap {
             (self.until, self.functions) = (false, 0);
         }
         self.otherwise &= self.ifs;
+        self.not &= self.ifs;
         self.numbers &= self.functions > 0;
         // Make the main program fit on one row next to the functions.
         self.set_slots(self.slots, false);
@@ -258,6 +267,7 @@ impl CustomMap {
         level.otherwise = self.otherwise;
         level.functions = self.functions;
         level.numbers = self.numbers;
+        level.not = self.not;
         level.wait = self.wait || self.cells.iter().any(|&c| matches!(c, '1'..='3'));
         level
     }

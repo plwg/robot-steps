@@ -177,9 +177,11 @@ pub enum Item {
         dir: Dir,
     },
     LoopEnd,
+    /// With `not`, the blocks run if `sense` *isn't* there.
     IfStart {
         sense: Sense,
         dir: Dir,
+        not: bool,
     },
     Else,
     IfEnd,
@@ -376,10 +378,11 @@ impl Runner<'_> {
                     }
                     i = end + 1;
                 }
-                Item::IfStart { sense, dir } => {
+                Item::IfStart { sense, dir, not } => {
                     let end = (i + 1..to).find(|&j| items[j] == Item::IfEnd).unwrap_or(to);
                     let otherwise = (i + 1..end).find(|&j| items[j] == Item::Else);
-                    let yes = self.world.sees(sense, dir);
+                    // `yes`: the blocks inside run.
+                    let yes = self.world.sees(sense, dir) != not;
                     self.emit(Step::Test { sense, dir, yes }, (strip, i), 1, in_loop, ctx);
                     match (yes, otherwise) {
                         (true, _) => self.run(strip, i + 1, otherwise.unwrap_or(end), in_loop, ctx),
@@ -415,7 +418,8 @@ impl Runner<'_> {
 /// block. `[` opens a loop and `]4` closes it, running it 4 times; `<R`
 /// opens a loop that runs until there's a wall to the right, closed with `]`.
 /// `{tR` starts "if there's a tree to the right", `{sU` "if there's a star
-/// above" (see `Sense::letter` for the rest), `/` is "else" and `}` ends it. `f1` calls the first function, and
+/// above" (see `Sense::letter` for the rest), and `{!tR` "if there's no
+/// tree to the right"; `/` is "else" and `}` ends it. `f1` calls the first function, and
 /// `f1n3` calls it with the number 3; inside a function, `#` in place of a
 /// count (`R#`, `]#`) means that number.
 pub fn parse_strips(text: &str) -> Vec<Vec<Item>> {
@@ -460,13 +464,22 @@ pub fn parse_program(text: &str) -> Vec<Item> {
                 open = Some(items.len());
                 Item::Until { dir: dir(d) }
             }
-            (Some('{'), Some(what)) => Item::IfStart {
-                sense: *Sense::ALL
-                    .iter()
-                    .find(|s| s.letter() == what)
-                    .expect("bad sense"),
-                dir: dir(chars.next().expect("{ needs a direction")),
-            },
+            (Some('{'), Some(what)) => {
+                let not = what == '!';
+                let what = if not {
+                    chars.next().expect("{! needs a sense")
+                } else {
+                    what
+                };
+                Item::IfStart {
+                    sense: *Sense::ALL
+                        .iter()
+                        .find(|s| s.letter() == what)
+                        .expect("bad sense"),
+                    dir: dir(chars.next().expect("{ needs a direction")),
+                    not,
+                }
+            }
             (Some('['), None) => {
                 open = Some(items.len());
                 Item::LoopStart { times: 1 }
@@ -528,9 +541,11 @@ pub struct LevelDef {
     loops: bool,
     /// What the "if" block can look for (none: no "if" block).
     ifs: &'static [Sense],
-    /// "Repeat until there's a wall", and "else" for the "if" blocks.
+    /// "Repeat until there's a wall", and "else" and "not" for the "if"
+    /// blocks.
     until: bool,
     otherwise: bool,
+    not: bool,
     /// How many function strips (0, 1 or 2), and how many slots each has.
     functions: usize,
     fn_slots: usize,
@@ -554,6 +569,7 @@ const fn level(id: &'static str, map: &'static [&'static str]) -> LevelDef {
         ifs: &[],
         until: false,
         otherwise: false,
+        not: false,
         functions: 0,
         fn_slots: 0,
         numbers: false,
@@ -608,6 +624,12 @@ impl LevelDef {
     /// Unlock "else" for the "if" blocks.
     const fn with_else(mut self) -> Self {
         self.otherwise = true;
+        self
+    }
+
+    /// Unlock "not" for the "if" blocks: "if there's no tree".
+    const fn with_not(mut self) -> Self {
+        self.not = true;
         self
     }
 
@@ -853,6 +875,23 @@ pub const CHAPTERS: &[Chapter] = &[
         ],
     },
     // Keep going round until there's a wall that way. The clouds decide how
+    // Not: "if there's *no* tree". The level only lets the "if" look for one
+    // thing, so it's the way to act where that thing isn't.
+    Chapter {
+        name: "Not",
+        levels: &[
+            level("not-demo", &["#*#*", "R..."])
+                .with_ifs(4, TREE)
+                .with_not()
+                .demo("[ {!tU U D } R ]4"),
+            level("not-1", &["#*##*#**#", "R........"])
+                .with_ifs(4, TREE)
+                .with_not(),
+            level("not-2", &[".@", ".*", ".*", ".@", ".@", ".*", "R@"])
+                .with_ifs(4, ROCK)
+                .with_not(),
+        ],
+    },
     // far that is, so no number of times would do.
     Chapter {
         name: "Repeat until",
@@ -1055,6 +1094,7 @@ pub struct Level {
     pub ifs: Vec<Sense>,
     pub until: bool,
     pub otherwise: bool,
+    pub not: bool,
     pub functions: usize,
     pub fn_slots: usize,
     pub numbers: bool,
@@ -1084,6 +1124,7 @@ impl Level {
         level.ifs = def.ifs.to_vec();
         level.until = def.until;
         level.otherwise = def.otherwise;
+        level.not = def.not;
         level.functions = def.functions;
         level.fn_slots = def.fn_slots;
         level.numbers = def.numbers;
@@ -1138,6 +1179,7 @@ impl Level {
             ifs: Vec::new(),
             until: false,
             otherwise: false,
+            not: false,
             functions: 0,
             fn_slots: 0,
             numbers: false,
@@ -1480,6 +1522,9 @@ mod tests {
         ("76", "[ {tR D / R } ]8"),
         ("77", "[ {tD R / D } ]7"),
         ("else-rock", "[ {rR U / R } ]8"),
+        // `{!tU` is "if there's no tree above".
+        ("not-1", "[ {!tU U D } R ]8"),
+        ("not-2", "[ {!rR R L } U ]6"),
     ];
 
     /// The levels with numbers, in order, leaving out the demos.
@@ -1663,6 +1708,7 @@ mod tests {
             Item::IfStart {
                 sense: Sense::Tree,
                 dir,
+                not: false,
             },
             Item::Block(Block {
                 cmd: Cmd::Chop(dir),
@@ -1863,7 +1909,11 @@ mod tests {
                 let mut ifs = Vec::new();
                 for dir in Dir::ALL {
                     for &sense in &level.ifs {
-                        ifs.push(Item::IfStart { sense, dir });
+                        ifs.push(Item::IfStart {
+                            sense,
+                            dir,
+                            not: false,
+                        });
                     }
                 }
                 if let Some(program) = fits_with(level, level.slots, &ifs, true) {
@@ -2519,5 +2569,41 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn not_levels_need_not() {
+        for level in numbered().iter().filter(|l| l.not) {
+            let mut ifs = Vec::new();
+            for dir in Dir::ALL {
+                for &sense in &level.ifs {
+                    ifs.push(Item::IfStart {
+                        sense,
+                        dir,
+                        not: false,
+                    });
+                }
+            }
+            if let Some(program) = fits_with(level, level.slots, &ifs, true) {
+                panic!("level {} fits without not: {program:?}", level.id);
+            }
+        }
+    }
+
+    #[test]
+    fn not_turns_an_if_round() {
+        let world = Level::parse(&level("test", &["R#", "..", "*."])).world();
+        let moves = |text: &str| -> Vec<String> {
+            expand(&[parse_program(text)], &world)
+                .iter()
+                .filter_map(|e| match e.step {
+                    Step::Do(cmd) => Some(format!("{cmd:?}")),
+                    _ => None,
+                })
+                .collect()
+        };
+        assert_eq!(moves("{!tR D } {!tD D }"), ["Move(Down)"]);
+        // Down past the tree, then no tree to the right: so right.
+        assert_eq!(moves("{tR D } {!tR R }"), ["Move(Down)", "Move(Right)"]);
     }
 }

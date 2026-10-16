@@ -10,9 +10,10 @@ use crate::{
     AXE_BROWN, BACK_BUTTON, CALL_INK, DISABLED, Face, GRASS, GRASS_DARK, Game, IF_LIME, INK,
     MAX_CELL, PANEL, PLAY_GREEN, Paint, REPEAT_TEAL, SHADOW, SKY, STAR, STOP_RED, Screen, W,
     WAIT_SLATE, darker, dir_color, draw_answer, draw_arrow, draw_axe_badge, draw_bracket,
-    draw_door, draw_ice, draw_key, draw_label, draw_loop_icon, draw_mystery, draw_number_icon,
-    draw_play_icon, draw_question, draw_rain_cloud, draw_robot, draw_rock, draw_shape, draw_star,
-    draw_trash_icon, draw_tree, draw_until_icon, draw_wait_icon, mix, progress, rounded_rect,
+    draw_door, draw_ice, draw_key, draw_label, draw_loop_icon, draw_mystery, draw_no_sign,
+    draw_number_icon, draw_play_icon, draw_question, draw_rain_cloud, draw_robot, draw_rock,
+    draw_shape, draw_star, draw_trash_icon, draw_tree, draw_until_icon, draw_wait_icon, mix,
+    progress, rounded_rect,
 };
 
 /// Where the map maker is up to.
@@ -299,11 +300,11 @@ impl Game {
             ));
         }
         for (i, &t) in Tool::ALL.iter().enumerate() {
-            let (col, row) = ((i % 5) as f32, (i / 5) as f32);
+            let (col, row) = ((i % 6) as f32, (i / 6) as f32);
             out.push((
                 Control::Tool(t),
-                vec2(1144.0 + col * 56.0, 436.0 + row * 66.0),
-                25.0,
+                vec2(1139.0 + col * 47.0, 436.0 + row * 66.0),
+                21.0,
             ));
         }
         for (i, &s) in SETTINGS.iter().enumerate() {
@@ -560,7 +561,7 @@ fn tool_colour(tool: Tool) -> Color {
         Tool::Axe => AXE_BROWN,
         Tool::Wait => WAIT_SLATE,
         Tool::Repeat | Tool::Loops | Tool::Until => REPEAT_TEAL,
-        Tool::If | Tool::Else => IF_LIME,
+        Tool::If | Tool::Else | Tool::Not => IF_LIME,
         Tool::Fn1 | Tool::Fn2 | Tool::Numbers => CALL_INK,
     }
 }
@@ -583,6 +584,7 @@ fn draw_tool_icon(tool: Tool, c: Vec2, half: f32) {
         Tool::Fn2 => draw_shape(c, half * 0.55, 2),
         Tool::Numbers => draw_number_icon(c, half, 1),
         Tool::Wait => draw_wait_icon(c, size, WHITE),
+        Tool::Not => draw_no_sign(c, half * 0.6),
     }
 }
 

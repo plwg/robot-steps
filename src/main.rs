@@ -790,6 +790,8 @@ enum Button {
     If,
     /// What an "if" looks for, offered after tapping "if".
     Sense(Sense),
+    /// Offered with them: "if there's *no*...".
+    Not,
     /// "Otherwise": the blocks after it run when the "if" says no.
     Else,
     /// Start a "repeat until there's a wall" (then pick a direction), or end
@@ -919,6 +921,8 @@ struct Game {
     preview: Vec<bool>,
     /// The slider's knob is being dragged.
     sliding: bool,
+    /// The "if" being started is "if there's *no*...".
+    if_not: bool,
     /// The trophy map: each finished level with the player's best, to play
     /// again and beat it.
     challenge: bool,
@@ -958,6 +962,7 @@ enum Kind {
     Key,
     Until,
     Else,
+    Not,
     Number,
     Rain,
 }
@@ -968,6 +973,8 @@ impl Kind {
             Kind::Rain
         } else if level.numbers {
             Kind::Number
+        } else if level.not {
+            Kind::Not
         } else if level.otherwise {
             Kind::Else
         } else if level.until {
@@ -1006,6 +1013,7 @@ impl Kind {
             Kind::Key => KEY_GOLD,
             Kind::Until => darker(REPEAT_TEAL, 0.8),
             Kind::Else => darker(IF_LIME, 0.8),
+            Kind::Not => mix(IF_LIME, STOP_RED, 0.45),
             Kind::Number => FN_COLOURS[1],
             Kind::Rain => RAIN_CLOUD,
         }
@@ -1055,6 +1063,7 @@ impl Game {
             scrub: 0,
             preview: Vec::new(),
             sliding: false,
+            if_not: false,
             challenge: false,
             best: progress::Best::new(),
             result: None,
@@ -1627,6 +1636,7 @@ impl Game {
             Button::If => !self.level().ifs.is_empty(),
             Button::Wait => self.level().wait,
             Button::Sense(sense) => self.picking() && self.level().ifs.contains(&sense),
+            Button::Not => self.picking() && self.level().not,
             Button::Else => self.level().otherwise,
             Button::Until => self.level().until,
             Button::Number => self.level().numbers,
@@ -1638,7 +1648,7 @@ impl Game {
     fn enabled(&self, button: Button) -> bool {
         let editing = self.mode == Mode::Edit;
         match button {
-            Button::Arrow(_) | Button::Axe | Button::Wait | Button::Sense(_) => {
+            Button::Arrow(_) | Button::Axe | Button::Wait | Button::Sense(_) | Button::Not => {
                 editing && self.can_place()
             }
             // A loop can hold an "if", but an "if" can't hold a loop.
@@ -1687,7 +1697,8 @@ impl Game {
                 let cmd = match self.armed.take() {
                     Some(Button::Axe) => Cmd::Chop(dir),
                     Some(Button::Sense(sense)) => {
-                        self.insert(Item::IfStart { sense, dir });
+                        let not = std::mem::take(&mut self.if_not);
+                        self.insert(Item::IfStart { sense, dir, not });
                         return;
                     }
                     Some(Button::Until) => {
@@ -1709,6 +1720,7 @@ impl Game {
                 }));
             }
             Button::Sense(_) => self.armed = Some(button),
+            Button::Not => self.if_not = !self.if_not,
             Button::Repeat => self.set_times(self.next_times()),
             Button::Loop => match open_loop(self.prog()) {
                 // Tapped again straight away: never mind.
@@ -1730,8 +1742,11 @@ impl Game {
                 Some(_) => self.insert(Item::IfEnd),
                 None if self.armed_if() => self.armed = None,
                 None => {
+                    self.if_not = false;
+                    // With only one thing to look for, it's picked straight
+                    // away (unless there's "not" to choose too).
                     self.armed = Some(match self.level().ifs[..] {
-                        [only] => Button::Sense(only),
+                        [only] if !self.level().not => Button::Sense(only),
                         _ => Button::If,
                     })
                 }
@@ -2093,6 +2108,7 @@ impl Game {
             (KeyCode::R, Button::Repeat),
             (KeyCode::L, Button::Loop),
             (KeyCode::I, Button::If),
+            (KeyCode::X, Button::Not),
             (KeyCode::Z, Button::Wait),
             (KeyCode::E, Button::Else),
             (KeyCode::W, Button::Until),
@@ -2138,9 +2154,9 @@ impl Game {
         // While choosing what an "if" looks for, the choices take the tools'
         // place.
         if self.picking() {
-            let senses: Vec<Button> = Sense::ALL
+            let senses: Vec<Button> = [Button::Not]
                 .into_iter()
-                .map(Button::Sense)
+                .chain(Sense::ALL.map(Button::Sense))
                 .filter(|&b| self.visible(b))
                 .collect();
             return match senses.len() {
@@ -3269,7 +3285,7 @@ impl Game {
                 Cmd::Wait => draw_wait_icon(r.center(), r.w, WHITE),
             },
             Item::LoopStart { .. } | Item::LoopEnd | Item::Else | Item::IfEnd | Item::Gap => {}
-            Item::IfStart { sense, dir } => draw_if_icon(r.center(), r.w, sense, dir),
+            Item::IfStart { sense, dir, not } => draw_if_icon(r.center(), r.w, sense, dir, not),
             Item::Until { dir } => draw_until_icon(r.center(), r.w, dir),
             Item::Call(f, _) => draw_shape(r.center(), r.w * 0.28, f),
         }
@@ -3486,7 +3502,7 @@ impl Game {
                 Button::Axe => (AXE_BROWN, 18.0),
                 Button::Wait => (WAIT_SLATE, 18.0),
                 Button::Repeat | Button::Loop => (REPEAT_TEAL, 18.0),
-                Button::If | Button::Sense(_) | Button::Else => (IF_LIME, 18.0),
+                Button::If | Button::Sense(_) | Button::Not | Button::Else => (IF_LIME, 18.0),
                 Button::Until => (REPEAT_TEAL, 18.0),
                 Button::Number => (CALL_INK, 18.0),
                 Button::Call(_) => (CALL_INK, 18.0),
@@ -3532,7 +3548,7 @@ impl Game {
             match button {
                 Button::Arrow(dir) => match self.armed {
                     Some(Button::Axe) => draw_chop_icon(c, size, dir),
-                    Some(Button::Sense(sense)) => draw_if_icon(c, size, sense, dir),
+                    Some(Button::Sense(sense)) => draw_if_icon(c, size, sense, dir, self.if_not),
                     Some(Button::Until) => draw_until_icon(c, size, dir),
                     _ => draw_arrow(c, size * 0.8, dir, WHITE),
                 },
@@ -3551,7 +3567,9 @@ impl Game {
                 }
                 // Once chosen, what it'll look for.
                 Button::If => match self.armed {
-                    Some(Button::Sense(sense)) => draw_if_icon(c, size, sense, Dir::Right),
+                    Some(Button::Sense(sense)) => {
+                        draw_if_icon(c, size, sense, Dir::Right, self.if_not)
+                    }
                     _ => draw_question(c, size * 0.8, WHITE),
                 },
                 // Each choice looks like a tile of the map.
@@ -3559,6 +3577,17 @@ impl Game {
                     let k = half - 5.0;
                     rounded_rect(c.x - k, c.y - k, k * 2.0, k * 2.0, 12.0, GRASS);
                     draw_sense(c, size * 0.95, sense);
+                    if self.if_not {
+                        draw_no_slash(c, size * 0.32);
+                    }
+                }
+                // Lit up while it's on.
+                Button::Not => {
+                    if self.if_not {
+                        let k = half - 5.0;
+                        rounded_rect(c.x - k, c.y - k, k * 2.0, k * 2.0, 12.0, WHITE);
+                    }
+                    draw_no_sign(c, size * 0.3);
                 }
                 Button::Else => draw_answer(c, false),
                 // While a loop is open, the button shows how to close it.
@@ -3903,10 +3932,43 @@ fn draw_count(n: u8, c: Vec2, strip: usize) {
 }
 
 /// "If there's a tree (or star) that way": the thing, an arrow, and a "?".
-fn draw_if_icon(c: Vec2, size: f32, sense: Sense, dir: Dir) {
-    draw_sense(c - vec2(size * 0.16, size * 0.02), size * 0.55, sense);
+/// With `not`, the thing is crossed out: "if there's no tree".
+fn draw_if_icon(c: Vec2, size: f32, sense: Sense, dir: Dir, not: bool) {
+    let at = c - vec2(size * 0.16, size * 0.02);
+    draw_sense(at, size * 0.55, sense);
+    if not {
+        draw_no_slash(at, size * 0.24);
+    }
     draw_arrow(c + vec2(size * 0.24, size * 0.16), size * 0.4, dir, WHITE);
     draw_question(c + vec2(size * 0.24, -size * 0.22), size * 0.36, WHITE);
+}
+
+/// A red slash across something: "no...".
+fn draw_no_slash(c: Vec2, r: f32) {
+    let d = vec2(r, -r) * 0.85;
+    draw_line(c.x - d.x, c.y - d.y, c.x + d.x, c.y + d.y, r * 0.28, WHITE);
+    draw_line(
+        c.x - d.x,
+        c.y - d.y,
+        c.x + d.x,
+        c.y + d.y,
+        r * 0.18,
+        STOP_RED,
+    );
+}
+
+/// "No": a red ring with a slash across it.
+fn draw_no_sign(c: Vec2, r: f32) {
+    draw_circle_lines(c.x, c.y, r, r * 0.22, STOP_RED);
+    let d = vec2(r, -r) * 0.7;
+    draw_line(
+        c.x - d.x,
+        c.y - d.y,
+        c.x + d.x,
+        c.y + d.y,
+        r * 0.22,
+        STOP_RED,
+    );
 }
 
 /// The answer to an "if": a green tick, or a grey cross.

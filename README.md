@@ -12,7 +12,7 @@ stars. There's no reading required.
 |---|---|
 | ![Three players, each with their own robot and progress](docs/players.png) | ![Level 48: the main program calls the ● and ▲ functions, and the robot is partway through ▲, chopping a tree](docs/level.png) |
 
-Across 91 levels in 15 chapters, numbered within each chapter (`3-2`), it
+Across 94 levels in 16 chapters, numbered within each chapter (`3-2`), it
 introduces, in the order programming is usually taught:
 
 1. **Moving:** up, down, left and right, in order
@@ -36,21 +36,23 @@ introduces, in the order programming is usually taught:
 9. **Else:** "if there's a tree to the right { go down } otherwise { go
    right }". The grey ✗ between the blocks marks where the "otherwise" part
    starts
-10. **Repeat until:** "keep going until there's a wall that way". The robot
+10. **Not:** "if there's *no* tree above { fetch the star }". In the
+    "if" choices, the red "no" sign crosses out what to look for
+11. **Repeat until:** "keep going until there's a wall that way". The robot
     looks before each time round. Mystery clouds decide how far it is, so no
     fixed number of times would do. One that would go round for ever (back
     where it started, and still no wall) stops and shakes red
-11. **Functions:** extra strips of blocks named with a shape (● and ▲) that
+12. **Functions:** extra strips of blocks named with a shape (● and ▲) that
     the main program calls whenever it needs them
-12. **Functions + if:** "if" blocks inside functions
-13. **Function numbers:** call ● with a number (set with repeat), and
+13. **Functions + if:** "if" blocks inside functions
+14. **Function numbers:** call ● with a number (set with repeat), and
     inside it a count can be "●'s number" instead of a fixed one, so one
     function makes stairs of 1, 2 and 3
-14. **Rain:** rain clouds count down 3, 2, 1, rain for a bit, then start
+15. **Rain:** rain clouds count down 3, 2, 1, rain for a bit, then start
     again. Every action takes a tick, so wait for the rain to pass (the wait
     block, repeated like any other) or hurry across before it starts. Being
     under a cloud when it rains is getting wet, and the end of the run
-15. **All together**
+16. **All together**
 
 Throughout, a **slider** along the top runs the program ahead of time, while
 it's being built: drag it to see where the robot would be just before any
@@ -86,16 +88,18 @@ easy-to-spot pointer.
 ## Making maps
 
 The pencil button on the level map opens the map maker. Tap the green **+**
-to start a map, then pick a tile on the right (grass, tree, rock, ice, mystery
-cloud, key, door, rain cloud, star or the robot) and tap or drag across the
-map to paint it. Tapping a rain cloud again counts it down: 3, 2, 1, 3. Under the map, − and + change its width and height and how many slots
+to start a map, then pick a tile on the right (grass, tree, rock, ice,
+mystery cloud, key, door, rain cloud, star or the robot) and tap or drag
+across the map to paint it. Tapping a rain cloud again counts it down: 3, 2,
+1, 3. Under the map, − and + change its width and height and how many slots
 the program has (and each function, when there are functions). The buttons
-under the tiles choose the blocks it allows: the axe, wait, repeat, loops, "repeat
-until", "if", "else", the two functions and numbers for them. Some bring
-others along, as in the game's own levels: loops need repeat; "repeat until"
-and functions need loops; "else" needs an "if"; and numbers need a function.
-Mystery clouds always come with "if" and the axe, and rain clouds with wait. The "if" can look for
-anything painted on the map, grass, and the edge.
+under the tiles choose the blocks it allows: the axe, wait, repeat, loops,
+"repeat until", "if", "else", "not", the two functions and numbers for them.
+Some bring others along, as in the game's own levels: loops need repeat;
+"repeat until" and functions need loops; "else" and "not" need an "if"; and
+numbers need a function. Mystery clouds always come with "if" and the axe,
+and rain clouds with wait. The "if" can look for anything painted on the
+map, grass, and the edge.
 
 Press play to try the map out. The arrow at the top left goes back to
 everyone's maps, where a map can be played, changed with the pencil, or
@@ -162,6 +166,7 @@ version to GitHub Pages (`.github/workflows/pages.yml`).
 | R / 2-9 | Repeat the last block (or loop) |
 | L | Open or close a loop |
 | I, then a choice and an arrow | Start an "if" (again to close) |
+| X (while choosing) | "Not": if there's *no*... |
 | Z | Wait a tick |
 | , / . | Move the slider back / forward a step |
 | E | Else, inside an "if" |
