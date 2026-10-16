@@ -444,7 +444,26 @@ pub fn parse_program(text: &str) -> Vec<Item> {
     items
 }
 
+/// A chapter: one idea, starting with a demo of any new block, then levels
+/// that use it. Levels are numbered within their chapter (`3-2`), so a
+/// chapter can grow without renumbering the rest.
+pub struct Chapter {
+    pub name: &'static str,
+    levels: &'static [LevelDef],
+}
+
+/// What an "if" can look for, for the levels' `with_ifs`.
+const TREE: &[Sense] = &[Sense::Tree];
+const STAR: &[Sense] = &[Sense::Star];
+const TREE_STAR: &[Sense] = &[Sense::Tree, Sense::Star];
+const ROCK: &[Sense] = &[Sense::Rock];
+
 pub struct LevelDef {
+    /// What the save files call this level. It never changes, wherever the
+    /// level moves: the levels used to be numbered straight through, and
+    /// these are those numbers (`d` and the number for a demo), so old saves
+    /// still work. New levels get a name instead.
+    id: &'static str,
     /// Legend: `.` grass, `#` tree, `@` rock, `?` mystery (tree or grass),
     /// `~` ice, `k` key, `D` locked door, `R` robot start, `*` star.
     map: &'static [&'static str],
@@ -468,8 +487,9 @@ pub struct LevelDef {
     demo: Option<&'static str>,
 }
 
-const fn level(map: &'static [&'static str]) -> LevelDef {
+const fn level(id: &'static str, map: &'static [&'static str]) -> LevelDef {
     LevelDef {
+        id,
         map,
         slots: MAX_PROGRAM,
         chop: false,
@@ -506,15 +526,10 @@ impl LevelDef {
         self.with_repeat(slots)
     }
 
-    /// Unlock the "if" block (and loops), looking for trees and/or stars,
-    /// and limit the program to `slots`, so an "if" in a loop is needed to
+    /// Unlock the "if" block (and loops), looking for `senses`, and limit the program to `slots`, so an "if" in a loop is needed to
     /// fit.
-    const fn with_ifs(mut self, slots: usize, tree: bool, star: bool) -> Self {
-        self.ifs = match (tree, star) {
-            (true, false) => &[Sense::Tree],
-            (false, true) => &[Sense::Star],
-            _ => &[Sense::Tree, Sense::Star],
-        };
+    const fn with_ifs(mut self, slots: usize, senses: &'static [Sense]) -> Self {
+        self.ifs = senses;
         self.with_loops(slots)
     }
 
@@ -560,258 +575,385 @@ impl LevelDef {
     }
 }
 
-pub const LEVELS: &[LevelDef] = &[
-    // Each new block is first shown in a demo, with the program already
-    // written: press play and watch.
-    // --- Moving ---
-    level(&["R.@", "@.*"]).demo("R D R"),
-    level(&["R...*"]),
-    level(&["R", ".", ".", "*"]),
-    level(&["R..", "##.", "##*"]),
-    level(&["*##", ".##", "..R"]),
-    level(&["R.*.*"]),
-    level(&["R#*", ".#.", "..."]),
-    level(&["R.##", "#..#", "##.*"]),
-    level(&["*...*", ".#.#.", "..R.."]),
-    level(&["R.#..*", ".##.#.", "....#."]),
-    level(&["*....*", ".####.", "...R.*"]),
-    level(&["R#*#*", ".#.#.", "....."]),
-    level(&["*...*", ".#.#.", "..R..", ".#.#.", "*...*"]),
-    // --- The axe: chop trees, but rocks stay put ---
-    level(&["R", "#", "*"]).with_axe().demo("cD D D"),
-    level(&["R#*"]).with_axe(),
-    level(&["..@*", "R.#.", "..@."]).with_axe(),
-    level(&["R@*", ".@.", "#@.", "..."]).with_axe(),
-    level(&["R##.*"]).with_axe(),
-    // --- Repeat: not enough slots without it ---
-    level(&["R....", "@@@@.", "@@@@*"])
-        .with_repeat(2)
-        .demo("R4 D2"),
-    level(&["R.......*"]).with_repeat(3),
-    level(&["R.....", "#####.", "#####.", "#####.", "*....."]).with_repeat(4),
-    level(&["R.....", "#####.", "*...#.", "#.###.", "#....."]).with_repeat(6),
-    level(&["R..*...*", "#######.", "*......."]).with_repeat(4),
-    // --- Axe and repeat together ---
-    level(&["@@@@@@@@@", "R...#...*", "@@@@@@@@@"])
-        .with_axe()
-        .with_repeat(4),
-    level(&["R.#....", ".@#.@@.", ".@#.@*.", "...@..."])
-        .with_axe()
-        .with_repeat(6),
-    level(&[
-        "R....#..*",
-        "@@@@.@@@.",
-        "*#.....#.",
-        "@@@@@@@@.",
-        "*........",
-    ])
-    .with_axe()
-    .with_repeat(12),
-    level(&[
-        "*#..@..#*",
-        "@@@.@.@@@",
-        "....R....",
-        "@@@.@.@@@",
-        "...#@..#*",
-    ])
-    .with_axe()
-    .with_repeat(20),
-    // --- More practice with the axe and repeat ---
-    level(&["R.#.", "@@#@", "*..."]).with_axe(),
-    level(&["R.......", "#######.", "........", ".#######", "*......."]).with_repeat(5),
-    // --- If: mystery clouds turn into a tree or grass each time you press
-    // play, so the robot has to look before it chops ---
-    level(&["R", "?", "*"]).with_tree_if().demo("{tD cD } D D"),
-    level(&["R?*"]).with_tree_if(),
-    level(&["R.?.*"]).with_tree_if(),
-    level(&["R?@", "@.@", "@?*"]).with_tree_if(),
-    level(&["@@@@@@", "R?.?.*", "@@@@@@"]).with_tree_if(),
-    level(&["*?.R.?*"]).with_tree_if(),
-    level(&["R.?.@*", "@@.@@?", "*?...."]).with_tree_if(),
-    // --- If and repeat together ---
-    level(&["R...?...*"]).with_tree_if().with_repeat(4),
-    level(&["R..?..#..", "@@@@@@@@.", "*..?..?.."])
-        .with_tree_if()
-        .with_repeat(14),
-    // --- Loops: repeat a whole group of blocks. First two familiar maps
-    // (levels 7 and 11) with too few slots to do them the old way ---
-    level(&["R@@@", "..@@", "@..@", "@@.*"])
-        .with_loops(2)
-        .demo("[ D R ]3"),
-    level(&["R.##", "#..#", "##.*"]).with_loops(4),
-    level(&["R#*#*", ".#.#.", "....."]).with_loops(5),
-    level(&[
-        "R.@@@@@", "@..@@@@", "@@..@@@", "@@@..@@", "@@@@..@", "@@@@@.*",
-    ])
-    .with_loops(5),
-    level(&["R..@@@@@@", "@@...@@@@", "@@@@...@@", "@@@@@@..*"]).with_loops(5),
-    level(&["...@...@..*", ".@.@.@.@.@@", "R@...@...@@"]).with_loops(8),
-    level(&["R#.#.#.#*"]).with_axe().with_loops(4),
-    // --- If: look before you act. Inside a loop, one rule handles whatever
-    // the robot finds, wherever it finds it ---
-    level(&["R.##..#*"])
-        .with_axe()
-        .with_ifs(3, true, false)
-        .demo("[ {tR cR } R ]7"),
-    level(&["R#..#.##.*"]).with_axe().with_ifs(3, true, false),
-    level(&["@**@*", "R...."])
-        .with_ifs(4, false, true)
-        .demo("[ {sU U D } R ]5"),
-    level(&["@*@@*@**@", "R........"]).with_ifs(4, false, true),
-    level(&["@@**@@@*@", "R#..#.#.."])
-        .with_axe()
-        .with_ifs(6, true, true),
-    // --- Functions: a strip of blocks with a shape for a name, which the
-    // main program can run (call) as often as it likes. First a familiar map
-    // (the zig-zag from the loop levels) ---
-    level(&["*@@*@*", ".@@.@.", "R....."])
-        .with_functions(5, 1, 2)
-        .demo("f1 R3 f1 R2 f1 | U2 D2"),
-    level(&["...@...@..*", ".@.@.@.@.@@", "R@...@...@@"]).with_functions(3, 1, 4),
-    level(&["@*@*@@@*", "@.@.@@@.", "R......."]).with_functions(5, 1, 3),
-    level(&[
-        "@@@@@@@*", "@@@@@@..", "@@@@@..@", "@@@...@@", "@@..@@@@", "@..@@@@@", "R.@@@@@@",
-    ])
-    .with_functions(3, 1, 4),
-    level(&["@*@*@*", "@.@.@.", "R#.#.#"])
-        .with_axe()
-        .with_functions(4, 1, 5),
-    level(&["*@*@*", ".@.@.", "R#.#."])
-        .with_axe()
-        .with_functions(5, 2, 2)
-        .demo("f1 f2 f1 f2 f1 | U2 D2 | cR R2"),
-    level(&["*@@*@*", ".@@.@.", "R.##.#"])
-        .with_axe()
-        .with_functions(6, 2, 3),
-    // --- Loops through the mystery clouds: look, chop if it's a tree, then step ---
-    level(&["R?.?.?.?*"]).with_tree_if().with_loops(3),
-    level(&["R?@@@", "@.?@@", "@@.?@", "@@@.?", "@@@@*"])
-        .with_tree_if()
-        .with_loops(4),
-    // --- If, on paths that turn ---
-    level(&["R#@@@", "@..@@", "@@#.@", "@@@*#", "@@@@*"])
-        .with_axe()
-        .with_ifs(6, true, false),
-    level(&[
-        "R..@@@@@@",
-        "*@...@@@@",
-        "@@*@...@@",
-        "@@@@@@...",
-        "@@@@@@*@.",
-        "@@@@@@@@*",
-    ])
-    .with_ifs(5, false, true),
-    // --- Two functions, and functions with the axe and the clouds ---
-    level(&[
-        "@@@.*@@@@.*@@",
-        "@@....@@....@",
-        "#..##....##..",
-        "R.####*.####*",
-    ])
-    .with_functions(4, 2, 3),
-    level(&["R####", "@@@@*", "####.", "*@@@@", ".####", "@@@@*"])
-        .with_axe()
-        .with_functions(6, 2, 3),
-    level(&[
-        "R?...@@@@@@@@",
-        "@@@@.@@@@@@@@",
-        "@@@@..?*.@@@@",
-        "@@@@@@@@.@@@@",
-        "@@@@@@@@...?*",
-    ])
-    .with_tree_if()
-    .with_functions(3, 1, 3),
-    // --- Functions with "if" blocks inside: one function looks around, and
-    // the main program says where ---
-    level(&["@**@*@", "R.....", "*@@*@.", "@@*@*.", "......", "@*@*@@"])
-        .with_ifs(5, false, true)
-        .with_functions(5, 1, 6),
-    level(&[
-        "@*@*@@@@@@@@@",
-        "R....@@@@@@@@",
-        "@@@@.@**@@@@@",
-        "@@@@.....@@@@",
-        "@@@@@@@@.*@*@",
-        "@@@@@@@@....*",
-    ])
-    .with_ifs(5, false, true)
-    .with_functions(5, 1, 4),
-    level(&[
-        "R.#*@@@@", "@@@#@@@@", "@@@..#@@", "@@@@@.@@", "@@@@@#@@", "@@@@@*#*",
-    ])
-    .with_axe()
-    .with_ifs(5, true, false)
-    .with_functions(5, 2, 3),
-    level(&["@*@**@*", "R.#.##.", "@@@@@@.", ".#.#...", "*@*@@*@"])
-        .with_axe()
-        .with_ifs(3, true, true)
-        .with_functions(3, 2, 6),
-    // --- Everything together ---
-    level(&[
-        "@@@@@@@..##.",
-        "@@@@@@@.@*@*",
-        "@@@..#.#@@@@",
-        "@@@.@@*@@@@@",
-        "R.#.@@@@@@@@",
-        "@*@*@@@@@@@@",
-    ])
-    .with_axe()
-    .with_ifs(5, true, true)
-    .with_functions(5, 2, 6),
-    // --- Ice: the robot slides until something stops it (grass, a rock, or
-    // the edge), so think ahead about where it will end up ---
-    level(&["R~~~@", "@@@~@", "@@@*@"]).demo("R D"),
-    level(&["R~~.~~*"]),
-    level(&["R~~~~@", "@@@@~@", "*~~~~."]),
-    // The star is right under the ice, but the robot slides past it.
-    level(&["R~~~~~.", "@@@*@@.", "@@@~@@.", "@@@~..."]),
-    level(&["R~@~~", "~~~~~", "~~~~*", "~~~@~"]),
-    level(&["~~~~~", "@@~*~", "~~~~~", "~R@~~"]),
-    level(&["~~@~~", "*~~@~", "@~~~~", "R~~~@"]),
-    // --- Keys: pick one up to open a locked door. Fetch the key first, even
-    // when it's the other way ---
-    level(&["R.kD*"]).demo("R R R R"),
-    level(&["kR.D*"]),
-    level(&["k@*", ".@D", "R.."]),
-    level(&["R#D*", ".@@@", "k@@@"]).with_axe(),
-    // Two doors need two keys.
-    level(&["R.D.D*", ".@@@@@", "k@@@@@", "k@@@@@"]).with_repeat(3),
-    level(&["R~~~k", "@@@@D", "*~~~."]),
-    // A locked door stops the robot sliding, even with the key: it has to
-    // step onto the door to open it.
-    level(&["*D~~~R", "@@@@@~", "k~~~~~"]),
-    level(&["@k@@k@@k@@", "R.D..D..D*"]).with_loops(4),
-    // --- Repeat until: keep going round until there's a wall that way. The
-    // clouds decide how far that is, so no number of times would do ---
-    level(&["R...@", "@@@*@"]).with_until(3).demo("<R R ] D"),
-    level(&["R.?...*", "..@@@@.", "..?...."]).with_until(6),
-    level(&["R..", "...", "?@?", ".@.", ".@.", ".@.", "*.."]).with_until(6),
-    // --- Else: if there's a tree, do one thing; if not, do another ---
-    level(&["R.#@", "@.#@", "@..*"])
-        .with_ifs(3, true, false)
-        .with_else()
-        .demo("[ {tR D / R } ]5"),
-    level(&["R..#@@", "@@..#@", "@@@.#@", "@@@..*"])
-        .with_ifs(3, true, false)
-        .with_else(),
-    level(&["R@@@", "...@", "##.@", "@@..", "@@#*"])
-        .with_ifs(3, true, false)
-        .with_else(),
-    // --- Functions with a number: say how big each time you call it ---
-    level(&[
-        "@@@...*", "@@@.@@@", "@@@.@@@", "@...@@@", "@.@@@@@", "..@@@@@", "R@@@@@@",
-    ])
-    .with_functions(3, 1, 2)
-    .with_numbers()
-    .demo("f1n1 f1n2 f1n3 | U# R#"),
-    level(&[
-        "R...@@@", "@@@.@@@", "@@@.@@@", "@@@...@", "@@@@@.@", "@@@@@..", "@@@@@@*",
-    ])
-    .with_functions(3, 1, 2)
-    .with_numbers(),
-    level(&["@@*@@@@", "@@.@@@*", "@@.@*@.", "R......"])
-        .with_functions(3, 1, 3)
-        .with_numbers(),
+pub const CHAPTERS: &[Chapter] = &[
+    // Up, down, left and right, in order.
+    Chapter {
+        name: "Moving",
+        levels: &[
+            level("d1", &["R.@", "@.*"]).demo("R D R"),
+            level("1", &["R...*"]),
+            level("2", &["R", ".", ".", "*"]),
+            level("3", &["R..", "##.", "##*"]),
+            level("4", &["*##", ".##", "..R"]),
+            level("5", &["R.*.*"]),
+            level("6", &["R#*", ".#.", "..."]),
+            level("7", &["R.##", "#..#", "##.*"]),
+            level("8", &["*...*", ".#.#.", "..R.."]),
+            level("9", &["R.#..*", ".##.#.", "....#."]),
+            level("10", &["*....*", ".####.", "...R.*"]),
+            level("11", &["R#*#*", ".#.#.", "....."]),
+            level("12", &["*...*", ".#.#.", "..R..", ".#.#.", "*...*"]),
+        ],
+    },
+    // The robot slides until something stops it (grass, a rock, or the edge),
+    // so think ahead about where it will end up.
+    Chapter {
+        name: "Ice",
+        levels: &[
+            level("d61", &["R~~~@", "@@@~@", "@@@*@"]).demo("R D"),
+            level("61", &["R~~.~~*"]),
+            level("62", &["R~~~~@", "@@@@~@", "*~~~~."]),
+            // The star is right under the ice, but the robot slides past it.
+            level("63", &["R~~~~~.", "@@@*@@.", "@@@~@@.", "@@@~..."]),
+            level("64", &["R~@~~", "~~~~~", "~~~~*", "~~~@~"]),
+            level("65", &["~~~~~", "@@~*~", "~~~~~", "~R@~~"]),
+            level("66", &["~~@~~", "*~~@~", "@~~~~", "R~~~@"]),
+        ],
+    },
+    // Chop trees, but rocks stay put.
+    Chapter {
+        name: "The axe",
+        levels: &[
+            level("d13", &["R", "#", "*"]).with_axe().demo("cD D D"),
+            level("13", &["R#*"]).with_axe(),
+            level("14", &["..@*", "R.#.", "..@."]).with_axe(),
+            level("15", &["R@*", ".@.", "#@.", "..."]).with_axe(),
+            level("16", &["R##.*"]).with_axe(),
+            level("25", &["R.#.", "@@#@", "*..."]).with_axe(),
+        ],
+    },
+    // Pick up a key to open a locked door. The robot remembers what it's
+    // carrying, so fetch the key first, even when it's the other way.
+    Chapter {
+        name: "Keys and doors",
+        levels: &[
+            level("d67", &["R.kD*"]).demo("R R R R"),
+            level("67", &["kR.D*"]),
+            level("68", &["k@*", ".@D", "R.."]),
+            level("69", &["R#D*", ".@@@", "k@@@"]).with_axe(),
+            level("71", &["R~~~k", "@@@@D", "*~~~."]),
+            // A locked door stops the robot sliding, even with the key: it has to
+            // step onto the door to open it.
+            level("72", &["*D~~~R", "@@@@@~", "k~~~~~"]),
+        ],
+    },
+    // Not enough slots without repeating a block; then with the axe, and keys.
+    Chapter {
+        name: "Repeat",
+        levels: &[
+            level("d17", &["R....", "@@@@.", "@@@@*"])
+                .with_repeat(2)
+                .demo("R4 D2"),
+            level("17", &["R.......*"]).with_repeat(3),
+            level("18", &["R.....", "#####.", "#####.", "#####.", "*....."]).with_repeat(4),
+            level("19", &["R.....", "#####.", "*...#.", "#.###.", "#....."]).with_repeat(6),
+            level("20", &["R..*...*", "#######.", "*......."]).with_repeat(4),
+            level(
+                "26",
+                &["R.......", "#######.", "........", ".#######", "*......."],
+            )
+            .with_repeat(5),
+            // Two doors need two keys.
+            level("70", &["R.D.D*", ".@@@@@", "k@@@@@", "k@@@@@"]).with_repeat(3),
+            level("21", &["@@@@@@@@@", "R...#...*", "@@@@@@@@@"])
+                .with_axe()
+                .with_repeat(4),
+            level("22", &["R.#....", ".@#.@@.", ".@#.@*.", "...@..."])
+                .with_axe()
+                .with_repeat(6),
+            level(
+                "23",
+                &[
+                    "R....#..*",
+                    "@@@@.@@@.",
+                    "*#.....#.",
+                    "@@@@@@@@.",
+                    "*........",
+                ],
+            )
+            .with_axe()
+            .with_repeat(12),
+            level(
+                "24",
+                &[
+                    "*#..@..#*",
+                    "@@@.@.@@@",
+                    "....R....",
+                    "@@@.@.@@@",
+                    "...#@..#*",
+                ],
+            )
+            .with_axe()
+            .with_repeat(20),
+        ],
+    },
+    // Mystery clouds turn into a tree or grass each time you press play, so
+    // the robot has to look before it chops.
+    Chapter {
+        name: "If",
+        levels: &[
+            level("d27", &["R", "?", "*"])
+                .with_tree_if()
+                .demo("{tD cD } D D"),
+            level("27", &["R?*"]).with_tree_if(),
+            level("28", &["R.?.*"]).with_tree_if(),
+            level("29", &["R?@", "@.@", "@?*"]).with_tree_if(),
+            level("30", &["@@@@@@", "R?.?.*", "@@@@@@"]).with_tree_if(),
+            level("31", &["*?.R.?*"]).with_tree_if(),
+            level("32", &["R.?.@*", "@@.@@?", "*?...."]).with_tree_if(),
+            level("33", &["R...?...*"]).with_tree_if().with_repeat(4),
+            level("34", &["R..?..#..", "@@@@@@@@.", "*..?..?.."])
+                .with_tree_if()
+                .with_repeat(14),
+        ],
+    },
+    // Repeat a whole group of blocks. First two familiar maps (levels 1-7
+    // and 1-11) with too few slots to do them the old way.
+    Chapter {
+        name: "Loops",
+        levels: &[
+            level("d35", &["R@@@", "..@@", "@..@", "@@.*"])
+                .with_loops(2)
+                .demo("[ D R ]3"),
+            level("35", &["R.##", "#..#", "##.*"]).with_loops(4),
+            level("36", &["R#*#*", ".#.#.", "....."]).with_loops(5),
+            level(
+                "37",
+                &[
+                    "R.@@@@@", "@..@@@@", "@@..@@@", "@@@..@@", "@@@@..@", "@@@@@.*",
+                ],
+            )
+            .with_loops(5),
+            level("38", &["R..@@@@@@", "@@...@@@@", "@@@@...@@", "@@@@@@..*"]).with_loops(5),
+            level("39", &["...@...@..*", ".@.@.@.@.@@", "R@...@...@@"]).with_loops(8),
+            level("40", &["R#.#.#.#*"]).with_axe().with_loops(4),
+            level("73", &["@k@@k@@k@@", "R.D..D..D*"]).with_loops(4),
+        ],
+    },
+    // Look before you act: inside a loop, one rule handles whatever the
+    // robot finds, wherever it finds it.
+    Chapter {
+        name: "If inside loops",
+        levels: &[
+            level("d41", &["R.##..#*"])
+                .with_axe()
+                .with_ifs(3, TREE)
+                .demo("[ {tR cR } R ]7"),
+            level("41", &["R#..#.##.*"]).with_axe().with_ifs(3, TREE),
+            level("d42", &["@**@*", "R...."])
+                .with_ifs(4, STAR)
+                .demo("[ {sU U D } R ]5"),
+            level("42", &["@*@@*@**@", "R........"]).with_ifs(4, STAR),
+            level("43", &["@@**@@@*@", "R#..#.#.."])
+                .with_axe()
+                .with_ifs(6, TREE_STAR),
+            level("49", &["R?.?.?.?*"]).with_tree_if().with_loops(3),
+            level("50", &["R?@@@", "@.?@@", "@@.?@", "@@@.?", "@@@@*"])
+                .with_tree_if()
+                .with_loops(4),
+            level("51", &["R#@@@", "@..@@", "@@#.@", "@@@*#", "@@@@*"])
+                .with_axe()
+                .with_ifs(6, TREE),
+            level(
+                "52",
+                &[
+                    "R..@@@@@@",
+                    "*@...@@@@",
+                    "@@*@...@@",
+                    "@@@@@@...",
+                    "@@@@@@*@.",
+                    "@@@@@@@@*",
+                ],
+            )
+            .with_ifs(5, STAR),
+        ],
+    },
+    // If there's a tree, do one thing; if not, do another.
+    Chapter {
+        name: "Else",
+        levels: &[
+            level("d76", &["R.#@", "@.#@", "@..*"])
+                .with_ifs(3, TREE)
+                .with_else()
+                .demo("[ {tR D / R } ]5"),
+            level("76", &["R..#@@", "@@..#@", "@@@.#@", "@@@..*"])
+                .with_ifs(3, TREE)
+                .with_else(),
+            level("77", &["R@@@", "...@", "##.@", "@@..", "@@#*"])
+                .with_ifs(3, TREE)
+                .with_else(),
+            // Not a tree this time: "if there's a rock that way".
+            level("else-rock", &["@@@..*", "@@@.@@", "@@..@@", "R..@@@"])
+                .with_ifs(3, ROCK)
+                .with_else(),
+        ],
+    },
+    // Keep going round until there's a wall that way. The clouds decide how
+    // far that is, so no number of times would do.
+    Chapter {
+        name: "Repeat until",
+        levels: &[
+            level("d74", &["R...@", "@@@*@"])
+                .with_until(3)
+                .demo("<R R ] D"),
+            // Go until a tree is in the way, chop it, and carry on.
+            level("until-axe", &["R..?...?..*"])
+                .with_axe()
+                .with_until(5),
+            level("74", &["R.?...*", "..@@@@.", "..?...."]).with_until(6),
+            level("75", &["R..", "...", "?@?", ".@.", ".@.", ".@.", "*.."]).with_until(6),
+        ],
+    },
+    // A strip of blocks with a shape for a name, which the main program can
+    // run (call) as often as it likes. First a familiar map (the zig-zag from
+    // the loops). Then two functions.
+    Chapter {
+        name: "Functions",
+        levels: &[
+            level("d44", &["*@@*@*", ".@@.@.", "R....."])
+                .with_functions(5, 1, 2)
+                .demo("f1 R3 f1 R2 f1 | U2 D2"),
+            level("44", &["...@...@..*", ".@.@.@.@.@@", "R@...@...@@"]).with_functions(3, 1, 4),
+            level("45", &["@*@*@@@*", "@.@.@@@.", "R......."]).with_functions(5, 1, 3),
+            level(
+                "46",
+                &[
+                    "@@@@@@@*", "@@@@@@..", "@@@@@..@", "@@@...@@", "@@..@@@@", "@..@@@@@",
+                    "R.@@@@@@",
+                ],
+            )
+            .with_functions(3, 1, 4),
+            level("47", &["@*@*@*", "@.@.@.", "R#.#.#"])
+                .with_axe()
+                .with_functions(4, 1, 5),
+            level("d48", &["*@*@*", ".@.@.", "R#.#."])
+                .with_axe()
+                .with_functions(5, 2, 2)
+                .demo("f1 f2 f1 f2 f1 | U2 D2 | cR R2"),
+            // Two functions: a short tower and a tall one, in no fixed order.
+            level("fn2-towers", &["@@@*@*@@@*", "@*@.@.@*@.", "@R........"])
+                .with_functions(5, 2, 3),
+            level("48", &["*@@*@*", ".@@.@.", "R.##.#"])
+                .with_axe()
+                .with_functions(6, 2, 3),
+            level(
+                "53",
+                &[
+                    "@@@.*@@@@.*@@",
+                    "@@....@@....@",
+                    "#..##....##..",
+                    "R.####*.####*",
+                ],
+            )
+            .with_functions(4, 2, 3),
+            level(
+                "54",
+                &["R####", "@@@@*", "####.", "*@@@@", ".####", "@@@@*"],
+            )
+            .with_axe()
+            .with_functions(6, 2, 3),
+        ],
+    },
+    // "If" blocks inside functions: one function looks around, and the main
+    // program says where.
+    Chapter {
+        name: "Functions that look",
+        levels: &[
+            level(
+                "55",
+                &[
+                    "R?...@@@@@@@@",
+                    "@@@@.@@@@@@@@",
+                    "@@@@..?*.@@@@",
+                    "@@@@@@@@.@@@@",
+                    "@@@@@@@@...?*",
+                ],
+            )
+            .with_tree_if()
+            .with_functions(3, 1, 3),
+            level(
+                "56",
+                &["@**@*@", "R.....", "*@@*@.", "@@*@*.", "......", "@*@*@@"],
+            )
+            .with_ifs(5, STAR)
+            .with_functions(5, 1, 6),
+            level(
+                "57",
+                &[
+                    "@*@*@@@@@@@@@",
+                    "R....@@@@@@@@",
+                    "@@@@.@**@@@@@",
+                    "@@@@.....@@@@",
+                    "@@@@@@@@.*@*@",
+                    "@@@@@@@@....*",
+                ],
+            )
+            .with_ifs(5, STAR)
+            .with_functions(5, 1, 4),
+            level(
+                "58",
+                &[
+                    "R.#*@@@@", "@@@#@@@@", "@@@..#@@", "@@@@@.@@", "@@@@@#@@", "@@@@@*#*",
+                ],
+            )
+            .with_axe()
+            .with_ifs(5, TREE)
+            .with_functions(5, 2, 3),
+        ],
+    },
+    // Say how big each time you call it.
+    Chapter {
+        name: "Functions with a number",
+        levels: &[
+            level(
+                "d78",
+                &[
+                    "@@@...*", "@@@.@@@", "@@@.@@@", "@...@@@", "@.@@@@@", "..@@@@@", "R@@@@@@",
+                ],
+            )
+            .with_functions(3, 1, 2)
+            .with_numbers()
+            .demo("f1n1 f1n2 f1n3 | U# R#"),
+            level(
+                "78",
+                &[
+                    "R...@@@", "@@@.@@@", "@@@.@@@", "@@@...@", "@@@@@.@", "@@@@@..", "@@@@@@*",
+                ],
+            )
+            .with_functions(3, 1, 2)
+            .with_numbers(),
+            level("79", &["@@*@@@@", "@@.@@@*", "@@.@*@.", "R......"])
+                .with_functions(3, 1, 3)
+                .with_numbers(),
+        ],
+    },
+    // Every block so far.
+    Chapter {
+        name: "Everything together",
+        levels: &[
+            level(
+                "59",
+                &["@*@**@*", "R.#.##.", "@@@@@@.", ".#.#...", "*@*@@*@"],
+            )
+            .with_axe()
+            .with_ifs(3, TREE_STAR)
+            .with_functions(3, 2, 6),
+            level(
+                "60",
+                &[
+                    "@@@@@@@..##.",
+                    "@@@@@@@.@*@*",
+                    "@@@..#.#@@@@",
+                    "@@@.@@*@@@@@",
+                    "R.#.@@@@@@@@",
+                    "@*@*@@@@@@@@",
+                ],
+            )
+            .with_axe()
+            .with_ifs(5, TREE_STAR)
+            .with_functions(5, 2, 6),
+        ],
+    },
 ];
 
 #[derive(Clone)]
@@ -836,8 +978,11 @@ pub struct Level {
     pub mysteries: Vec<Pos>,
     /// Where the keys lie.
     pub keys: Vec<Pos>,
-    /// The level's number on the map. Demos aren't numbered: they share the
-    /// number of the level they come before.
+    /// What the save files call it (see `LevelDef::id`).
+    pub id: &'static str,
+    /// Its chapter (from 1), and its number in the chapter (from 1). Demos
+    /// aren't numbered: they share the number of the level they come before.
+    pub chapter: usize,
     pub number: usize,
     /// A demo's program, already written.
     pub demo: Option<Vec<Vec<Item>>>,
@@ -846,6 +991,7 @@ pub struct Level {
 impl Level {
     pub fn parse(def: &LevelDef) -> Level {
         let mut level = Level::from_rows(def.map);
+        level.id = def.id;
         level.slots = def.slots;
         level.chop = def.chop;
         level.repeat = def.repeat;
@@ -910,18 +1056,21 @@ impl Level {
             numbers: false,
             mysteries,
             keys,
+            id: "",
+            chapter: 0,
             number: 0,
             demo: None,
         }
     }
 
-    /// What the save file calls this level: its number, or `d` and the
-    /// number for a demo. Numbers stay the same when demos are added.
+    /// What the save file calls this level.
     pub fn key(&self) -> String {
-        match self.demo {
-            Some(_) => format!("d{}", self.number),
-            None => self.number.to_string(),
-        }
+        self.id.to_string()
+    }
+
+    /// Its chapter and number, as shown: `3-2`.
+    pub fn label(&self) -> String {
+        format!("{}-{}", self.chapter, self.number)
     }
 
     /// The level as drawn while building the program, mysteries unrevealed.
@@ -1051,7 +1200,7 @@ impl World {
     ///
     /// A bump has to stop the program, not just leave the robot where it is:
     /// otherwise walking into a wall on purpose lines the robot up, and some
-    /// levels (27, 41 and 45) can be done without the tool they teach.
+    /// levels (6-1, 8-1 and 11-2) can be done without the tool they teach.
     pub fn act(&mut self, cmd: Cmd) -> Result<Event, ()> {
         let (dx, dy) = cmd.dir().delta();
         let step = |(x, y): Pos| (x + dx, y + dy);
@@ -1101,14 +1250,25 @@ impl World {
     }
 }
 
+/// The name of chapter `chapter` (from 1).
+pub fn chapter_name(chapter: usize) -> &'static str {
+    CHAPTERS.get(chapter.wrapping_sub(1)).map_or("", |c| c.name)
+}
+
 pub fn all_levels() -> Vec<Level> {
-    let mut levels: Vec<Level> = LEVELS.iter().map(Level::parse).collect();
-    let mut number = levels.iter().filter(|l| l.demo.is_none()).count() + 1;
-    for level in levels.iter_mut().rev() {
-        if level.demo.is_none() {
-            number -= 1;
+    let mut levels = Vec::new();
+    for (c, chapter) in CHAPTERS.iter().enumerate() {
+        let mut these: Vec<Level> = chapter.levels.iter().map(Level::parse).collect();
+        // A demo shares the number of the level after it.
+        let mut number = these.iter().filter(|l| l.demo.is_none()).count() + 1;
+        for level in these.iter_mut().rev() {
+            if level.demo.is_none() {
+                number -= 1;
+            }
+            level.chapter = c + 1;
+            level.number = number.max(1);
         }
-        level.number = number;
+        levels.extend(these);
     }
     levels
 }
@@ -1121,67 +1281,71 @@ mod tests {
     /// Known solutions for the loop levels (too many loop programs to search).
     /// `R` move right, `cR` chop right, a number repeats a
     /// block, `[` opens a loop and `]4` closes it, running it 4 times.
-    const LOOP_SOLUTIONS: &[(usize, &str)] = &[
-        (35, "[ R D ]3"),
-        (36, "[ D2 R2 U2 ]2"),
-        (37, "[ R D ]5 R"),
-        (38, "[ R2 D ]3 R2"),
-        (39, "[ U2 R2 D2 R2 ]2 U2 R2"),
-        (40, "[ cR R2 ]4"),
-        (73, "[ R U D R2 ]3"),
+    const LOOP_SOLUTIONS: &[(&str, &str)] = &[
+        ("35", "[ R D ]3"),
+        ("36", "[ D2 R2 U2 ]2"),
+        ("37", "[ R D ]5 R"),
+        ("38", "[ R2 D ]3 R2"),
+        ("39", "[ U2 R2 D2 R2 ]2 U2 R2"),
+        ("40", "[ cR R2 ]4"),
+        ("73", "[ R U D R2 ]3"),
     ];
 
     /// Known solutions for the "repeat until" levels. `<R` starts "repeat
     /// until there's a wall to the right".
-    const UNTIL_SOLUTIONS: &[(usize, &str)] =
-        &[(74, "<R R ] D2 <R R ] U2"), (75, "<D D ] R2 <D D ] L2")];
+    const UNTIL_SOLUTIONS: &[(&str, &str)] = &[
+        ("until-axe", "<R R ] cR <R R ]"),
+        ("74", "<R R ] D2 <R R ] U2"),
+        ("75", "<D D ] R2 <D D ] L2"),
+    ];
 
     /// Known solutions for the function levels: the main strip, then each
     /// function after a `|`. `f1` calls the first function.
-    const FUNCTION_SOLUTIONS: &[(usize, &str)] = &[
-        (44, "f1 f1 f1 | U2 R2 D2 R2"),
-        (45, "f1 R f1 R3 f1 | R U2 D2"),
-        (46, "f1 R f1 | [ R U ]3"),
-        (47, "[ f1 ]3 | cR R U2 D2 R"),
-        (48, "f1 f2 f2 f1 f2 f1 | U2 D2 R | cR R"),
-        (53, "f1 f2 f1 f2 | [ R U ]3 | [ R D ]3"),
-        (54, "f1 D2 f2 D2 f1 D | [ cR R ]4 | [ cL L ]4"),
-        (55, "[ f1 D2 ]3 | [ {tR cR } R ]4"),
-        (56, "[ f1 R ]5 D3 [ f1 L ]5 | {sU U D } {sD D U }"),
-        (57, "f1 D2 f1 D2 f1 | [ {sU U D } R ]4"),
+    const FUNCTION_SOLUTIONS: &[(&str, &str)] = &[
+        ("44", "f1 f1 f1 | U2 R2 D2 R2"),
+        ("45", "f1 R f1 R3 f1 | R U2 D2"),
+        ("46", "f1 R f1 | [ R U ]3"),
+        ("47", "[ f1 ]3 | cR R U2 D2 R"),
+        ("fn2-towers", "f1 f2 f2 f1 f2 | U D R2 | U2 D2 R2"),
+        ("48", "f1 f2 f2 f1 f2 f1 | U2 D2 R | cR R"),
+        ("53", "f1 f2 f1 f2 | [ R U ]3 | [ R D ]3"),
+        ("54", "f1 D2 f2 D2 f1 D | [ cR R ]4 | [ cL L ]4"),
+        ("55", "[ f1 D2 ]3 | [ {tR cR } R ]4"),
+        ("56", "[ f1 R ]5 D3 [ f1 L ]5 | {sU U D } {sD D U }"),
+        ("57", "f1 D2 f1 D2 f1 | [ {sU U D } R ]4"),
         (
-            58,
+            "58",
             "[ f1 ]3 [ f2 ]2 [ f1 ]2 [ f2 ]3 [ f1 ]2 | {tR cR } R | {tD cD } D",
         ),
         (
-            59,
+            "59",
             "[ f1 ]6 D2 [ f2 ]6 | {tR cR } R {sU U D } | {tL cL } L {sD D U }",
         ),
-        (60, "f1 f2 f1 f2 f1 | [ {tR cR } R {sD D U } ]3 | U2 R"),
+        ("60", "f1 f2 f1 f2 f1 | [ {tR cR } R {sD D U } ]3 | U2 R"),
         // `f1n3` calls the function with the number 3, and `R#` inside it
         // moves right that many times.
-        (78, "f1n3 f1n2 f1n1 | R# D#"),
-        (79, "f1n3 f1n1 f1n2 | R2 U# D#"),
+        ("78", "f1n3 f1n2 f1n1 | R# D#"),
+        ("79", "f1n3 f1n1 f1n2 | R2 U# D#"),
     ];
 
     /// Known solutions for the "if" levels. `{tR` starts "if there's a tree to
     /// the right", `{sU` "if there's a star above", and `}` ends it.
-    const IF_SOLUTIONS: &[(usize, &str)] = &[
-        (41, "[ {tR cR } R ]9"),
-        (42, "[ {sU U D } R ]8"),
-        (43, "[ {tR cR } {sU U D } R ]8"),
+    const IF_SOLUTIONS: &[(&str, &str)] = &[
+        ("41", "[ {tR cR } R ]9"),
+        ("42", "[ {sU U D } R ]8"),
+        ("43", "[ {tR cR } {sU U D } R ]8"),
         // Through the mystery clouds: look, chop if it's a tree, then step.
-        (49, "[ {tR cR } R2 ]4"),
-        (50, "[ {tR cR } R D ]4"),
-        (51, "[ {tR cR } R {tD cD } D ]4"),
-        (52, "[ {sD D U } R2 D ]5"),
+        ("49", "[ {tR cR } R2 ]4"),
+        ("50", "[ {tR cR } R D ]4"),
+        ("51", "[ {tR cR } R {tD cD } D ]4"),
+        ("52", "[ {sD D U } R2 D ]5"),
         // `/` is "else".
-        (76, "[ {tR D / R } ]8"),
-        (77, "[ {tD R / D } ]7"),
+        ("76", "[ {tR D / R } ]8"),
+        ("77", "[ {tD R / D } ]7"),
+        ("else-rock", "[ {rR U / R } ]8"),
     ];
 
-    /// The levels with numbers, in order (so level `n` is at `n - 1`),
-    /// leaving out the demos.
+    /// The levels with numbers, in order, leaving out the demos.
     fn numbered() -> Vec<Level> {
         all_levels()
             .into_iter()
@@ -1189,48 +1353,94 @@ mod tests {
             .collect()
     }
 
+    /// The level the save files call `id`.
+    fn by_id(id: &str) -> Level {
+        all_levels()
+            .into_iter()
+            .find(|l| l.id == id)
+            .unwrap_or_else(|| panic!("no level {id}"))
+    }
+
+    /// Check every level `has` picks out has a solution in `solutions`, and
+    /// that each solution fits and always wins.
+    fn check_solutions(has: impl Fn(&Level) -> bool, solutions: &[(&str, &str)]) {
+        let mut levels: Vec<&str> = numbered().iter().filter(|l| has(l)).map(|l| l.id).collect();
+        let mut solved: Vec<&str> = solutions.iter().map(|&(id, _)| id).collect();
+        levels.sort();
+        solved.sort();
+        assert_eq!(levels, solved, "every level needs a solution");
+        for &(id, text) in solutions {
+            let level = by_id(id);
+            let strips = parse_strips(text);
+            assert_eq!(strips.len(), 1 + level.functions, "level {id}: strips");
+            assert!(tiles(&strips[0]) <= level.slots, "level {id}: too long");
+            for f in &strips[1..] {
+                assert!(tiles(f) <= level.fn_slots, "level {id}: function too long");
+                assert!(
+                    !f.iter().any(|i| matches!(i, Item::Call(..))),
+                    "level {id}: functions can't call functions"
+                );
+            }
+            assert!(always_wins(&level, &strips), "level {id} solution fails");
+        }
+    }
+
     #[test]
     fn demos_show_a_program_that_wins() {
         let levels = all_levels();
         for (i, level) in levels.iter().enumerate() {
             let Some(strips) = &level.demo else { continue };
-            let n = level.number;
+            let n = level.id;
             let next = &levels[i + 1];
             assert!(
-                next.demo.is_none() && next.number == n,
-                "demo d{n} must come just before level {n}"
+                next.demo.is_none() && next.label() == level.label(),
+                "demo {n} must come just before a level, sharing its number"
             );
-            assert_eq!(strips.len(), 1 + level.functions, "demo d{n}: strips");
-            assert!(tiles(&strips[0]) <= level.slots, "demo d{n}: too long");
+            assert_eq!(strips.len(), 1 + level.functions, "demo {n}: strips");
+            assert!(tiles(&strips[0]) <= level.slots, "demo {n}: too long");
             for f in &strips[1..] {
-                assert!(tiles(f) <= level.fn_slots, "demo d{n}: function too long");
+                assert!(tiles(f) <= level.fn_slots, "demo {n}: function too long");
                 assert!(
                     !f.iter().any(|i| matches!(i, Item::Call(..))),
-                    "demo d{n}: functions can't call functions"
+                    "demo {n}: functions can't call functions"
                 );
             }
             assert!(
                 level.mysteries.is_empty() || level.ifs.contains(&Sense::Tree),
-                "demo d{n}: mysteries need an \"if\" that looks for trees"
+                "demo {n}: mysteries need an \"if\" that looks for trees"
             );
-            assert!(always_wins(level, strips), "demo d{n} doesn't win");
+            assert!(always_wins(level, strips), "demo {n} doesn't win");
         }
     }
 
     #[test]
-    fn levels_keep_their_numbers_and_keys() {
+    fn old_saves_still_line_up() {
         let levels = all_levels();
         let keys: Vec<String> = levels.iter().map(Level::key).collect();
-        assert_eq!(keys[..3], ["d1", "1", "2"]);
         let unique: HashSet<&String> = keys.iter().collect();
         assert_eq!(unique.len(), keys.len(), "save keys must be unique");
-        let numbers: Vec<usize> = numbered().iter().map(|l| l.number).collect();
-        assert_eq!(numbers, (1..=numbers.len()).collect::<Vec<_>>());
-        // Levels already played keep their number: 13 is still the first
-        // axe level, and 48 the first with two functions.
-        let numbered = numbered();
-        assert!(numbered[12].chop && (numbered[12].w, numbered[12].h) == (3, 1));
-        assert_eq!(numbered[47].functions, 2);
+        // Saves from when levels were numbered straight through, 1 to 79,
+        // with a demo (`d13`) before each new block.
+        for n in 1..=79 {
+            assert!(keys.contains(&n.to_string()), "level {n} is gone");
+        }
+        for d in [1, 13, 17, 27, 35, 41, 42, 44, 48, 61, 67, 74, 76, 78] {
+            assert!(keys.contains(&format!("d{d}")), "demo d{d} is gone");
+        }
+        // They're the same levels: 13 was the first axe level, and 48 the
+        // first with two functions.
+        let first_axe = by_id("13");
+        assert!(first_axe.chop && (first_axe.w, first_axe.h) == (3, 1));
+        assert_eq!(by_id("48").functions, 2);
+        // Each chapter counts up from 1.
+        for chapter in 1..=CHAPTERS.len() {
+            let numbers: Vec<usize> = numbered()
+                .iter()
+                .filter(|l| l.chapter == chapter)
+                .map(|l| l.number)
+                .collect();
+            assert_eq!(numbers, (1..=numbers.len()).collect::<Vec<_>>());
+        }
     }
 
     /// Does this program win however the mysteries turn out?
@@ -1253,55 +1463,15 @@ mod tests {
 
     #[test]
     fn loop_levels_have_a_solution_that_fits() {
-        let levels = numbered();
-        let loop_levels: Vec<usize> = (1..=levels.len())
-            .filter(|&n| {
-                let l = &levels[n - 1];
-                l.loops && l.functions == 0 && l.ifs.is_empty() && !l.until
-            })
-            .collect();
-        let solved: Vec<usize> = LOOP_SOLUTIONS.iter().map(|&(n, _)| n).collect();
-        assert_eq!(loop_levels, solved, "every loop level needs a solution");
-        for &(n, text) in LOOP_SOLUTIONS {
-            let level = &levels[n - 1];
-            let program = parse_program(text);
-            assert!(
-                tiles(&program) <= level.slots,
-                "level {n} solution too long"
-            );
-            assert!(always_wins(level, &[program]), "level {n} solution fails");
-        }
+        check_solutions(
+            |l| l.loops && l.functions == 0 && l.ifs.is_empty() && !l.until,
+            LOOP_SOLUTIONS,
+        );
     }
 
     #[test]
     fn function_levels_have_a_solution_that_fits() {
-        let levels = numbered();
-        let function_levels: Vec<usize> = (1..=levels.len())
-            .filter(|&n| levels[n - 1].functions > 0)
-            .collect();
-        let solved: Vec<usize> = FUNCTION_SOLUTIONS.iter().map(|&(n, _)| n).collect();
-        assert_eq!(
-            function_levels, solved,
-            "every function level needs a solution"
-        );
-        for &(n, text) in FUNCTION_SOLUTIONS {
-            let level = &levels[n - 1];
-            let strips = parse_strips(text);
-            assert_eq!(
-                strips.len(),
-                1 + level.functions,
-                "level {n}: wrong strip count"
-            );
-            assert!(tiles(&strips[0]) <= level.slots, "level {n}: main too long");
-            for f in &strips[1..] {
-                assert!(tiles(f) <= level.fn_slots, "level {n}: function too long");
-                assert!(
-                    !f.iter().any(|i| matches!(i, Item::Call(..))),
-                    "level {n}: functions can't call functions"
-                );
-            }
-            assert!(always_wins(level, &strips), "level {n} solution fails");
-        }
+        check_solutions(|l| l.functions > 0, FUNCTION_SOLUTIONS);
     }
 
     /// One world per outcome after running a program; `None` once won.
@@ -1523,14 +1693,13 @@ mod tests {
 
     #[test]
     fn function_levels_need_a_function() {
-        for (i, level) in numbered().iter().enumerate() {
+        for level in numbered().iter() {
             if level.functions > 0
                 && let Some(program) = fits_with_loops(level, level.slots)
             {
                 panic!(
                     "level {} fits in {} slots with loops alone: {program:?}",
-                    i + 1,
-                    level.slots
+                    level.id, level.slots
                 );
             }
         }
@@ -1538,29 +1707,15 @@ mod tests {
 
     #[test]
     fn if_levels_have_a_solution_that_fits() {
-        let levels = numbered();
-        let if_levels: Vec<usize> = (1..=levels.len())
-            .filter(|&n| {
-                let l = &levels[n - 1];
-                !l.ifs.is_empty() && l.loops && l.functions == 0
-            })
-            .collect();
-        let solved: Vec<usize> = IF_SOLUTIONS.iter().map(|&(n, _)| n).collect();
-        assert_eq!(if_levels, solved, "every if level needs a solution");
-        for &(n, text) in IF_SOLUTIONS {
-            let level = &levels[n - 1];
-            let program = parse_program(text);
-            assert!(
-                tiles(&program) <= level.slots,
-                "level {n} solution too long"
-            );
-            assert!(always_wins(level, &[program]), "level {n} solution fails");
-        }
+        check_solutions(
+            |l| !l.ifs.is_empty() && l.loops && l.functions == 0,
+            IF_SOLUTIONS,
+        );
     }
 
     #[test]
     fn else_levels_need_else() {
-        for (i, level) in numbered().iter().enumerate() {
+        for level in numbered().iter() {
             if level.otherwise {
                 let mut ifs = Vec::new();
                 for dir in Dir::ALL {
@@ -1569,7 +1724,7 @@ mod tests {
                     }
                 }
                 if let Some(program) = fits_with(level, level.slots, &ifs, true) {
-                    panic!("level {} fits without else: {program:?}", i + 1);
+                    panic!("level {} fits without else: {program:?}", level.id);
                 }
             }
         }
@@ -1577,30 +1732,16 @@ mod tests {
 
     #[test]
     fn until_levels_have_a_solution_that_fits() {
-        let levels = numbered();
-        let until_levels: Vec<usize> = (1..=levels.len())
-            .filter(|&n| levels[n - 1].until)
-            .collect();
-        let solved: Vec<usize> = UNTIL_SOLUTIONS.iter().map(|&(n, _)| n).collect();
-        assert_eq!(until_levels, solved, "every until level needs a solution");
-        for &(n, text) in UNTIL_SOLUTIONS {
-            let level = &levels[n - 1];
-            let program = parse_program(text);
-            assert!(
-                tiles(&program) <= level.slots,
-                "level {n} solution too long"
-            );
-            assert!(always_wins(level, &[program]), "level {n} solution fails");
-        }
+        check_solutions(|l| l.until, UNTIL_SOLUTIONS);
     }
 
     #[test]
     fn until_levels_need_until() {
-        for (i, level) in numbered().iter().enumerate() {
+        for level in numbered().iter() {
             if level.until
                 && let Some(program) = fits_with_loops(level, level.slots)
             {
-                panic!("level {} can be done without until: {program:?}", i + 1);
+                panic!("level {} can be done without until: {program:?}", level.id);
             }
         }
     }
@@ -1672,18 +1813,18 @@ mod tests {
         let mut easy = Level::from_rows(&["R.*.*"]);
         (easy.slots, easy.functions, easy.fn_slots) = (2, 1, 1);
         assert!(fits_without_numbers(&easy).is_some());
-        for (i, level) in numbered().iter().enumerate() {
+        for level in numbered().iter() {
             if level.numbers
                 && let Some(function) = fits_without_numbers(level)
             {
-                panic!("level {} fits with the function {function}", i + 1);
+                panic!("level {} fits with the function {function}", level.id);
             }
         }
     }
 
     #[test]
     fn until_goes_on_until_a_wall() {
-        let world = Level::parse(&level(&["R...@", ".#..*"])).world();
+        let world = Level::parse(&level("test", &["R...@", ".#..*"])).world();
         let steps = |text: &str| -> Vec<String> {
             expand(&[parse_program(text)], &world)
                 .iter()
@@ -1707,7 +1848,7 @@ mod tests {
             [&no, &right, &no, &right, &no, &right, &looks(true)].map(String::clone)
         );
         // It looks first, so with a wall already there nothing runs.
-        let below = Level::parse(&level(&["R", "@", "*"])).world();
+        let below = Level::parse(&level("test", &["R", "@", "*"])).world();
         assert_eq!(expand(&[parse_program("<D D ] R")], &below).len(), 2);
         // Going nowhere would go on for ever, so it stops.
         let stuck = steps("<R D U ]");
@@ -1717,7 +1858,7 @@ mod tests {
 
     #[test]
     fn else_runs_when_the_if_says_no() {
-        let world = Level::parse(&level(&["R#.", "...", "..*"])).world();
+        let world = Level::parse(&level("test", &["R#.", "...", "..*"])).world();
         let moves = |text: &str| -> Vec<String> {
             expand(&[parse_program(text)], &world)
                 .iter()
@@ -1746,13 +1887,13 @@ mod tests {
 
     #[test]
     fn if_levels_need_an_if() {
-        for (i, level) in numbered().iter().enumerate() {
+        for level in numbered().iter() {
             if level.ifs.is_empty() {
                 continue;
             }
             if level.loops {
                 if let Some(program) = fits_with(level, level.slots, &[], false) {
-                    panic!("level {} fits without an if: {program:?}", i + 1);
+                    panic!("level {} fits without an if: {program:?}", level.id);
                 }
             } else {
                 let allow = Allow {
@@ -1763,7 +1904,7 @@ mod tests {
                     fewest_blocks(level, allow),
                     None,
                     "level {} can be done without an if",
-                    i + 1
+                    level.id
                 );
             }
         }
@@ -1771,7 +1912,7 @@ mod tests {
 
     #[test]
     fn ifs_only_run_when_the_robot_sees_something() {
-        let world = Level::parse(&level(&["*..", ".R#", "..."])).world();
+        let world = Level::parse(&level("test", &["*..", ".R#", "..."])).world();
         let steps = |text: &str| -> Vec<String> {
             expand(&[parse_program(text)], &world)
                 .iter()
@@ -1793,10 +1934,9 @@ mod tests {
     #[test]
     fn loop_search_finds_loop_solutions() {
         // Sanity check for `fits_with_loops`: it finds the loop levels' answers.
-        let levels = numbered();
-        for &(n, _) in LOOP_SOLUTIONS {
-            let level = &levels[n - 1];
-            assert!(fits_with_loops(level, level.slots).is_some(), "level {n}");
+        for &(id, _) in LOOP_SOLUTIONS {
+            let level = by_id(id);
+            assert!(fits_with_loops(&level, level.slots).is_some(), "level {id}");
         }
     }
 
@@ -1806,7 +1946,7 @@ mod tests {
         rows[0].replace_range(0..1, "*");
         rows[7].replace_range(7..8, "R");
         let rows: Vec<&'static str> = rows.into_iter().map(|r| &*r.leak()).collect();
-        Level::parse(&level(rows.leak())).world()
+        Level::parse(&level("test", rows.leak())).world()
     }
 
     fn moves(strips: &[Vec<Item>]) -> Vec<String> {
@@ -1847,13 +1987,13 @@ mod tests {
 
     #[test]
     fn loop_levels_need_a_loop() {
-        for (i, level) in numbered().iter().enumerate() {
+        for level in numbered().iter() {
             if level.loops {
                 let without = fewest_blocks(level, Allow::level(level)).unwrap_or(usize::MAX);
                 assert!(
                     without > level.slots,
                     "level {} fits in {without} blocks without a loop",
-                    i + 1
+                    level.id
                 );
             }
         }
@@ -1986,8 +2126,8 @@ mod tests {
 
     #[test]
     fn every_level_is_solvable_within_its_slots() {
-        for (i, level) in numbered().iter().enumerate() {
-            let n = i + 1;
+        for level in numbered().iter() {
+            let n = level.id;
             assert!(!level.stars.is_empty(), "level {n} has no stars");
             assert!(level.slots <= MAX_PROGRAM, "level {n} has too many slots");
             // Clouds need a way to deal with them: looking for a tree, or
@@ -2014,7 +2154,7 @@ mod tests {
 
     #[test]
     fn repeat_levels_need_repeat() {
-        for (i, level) in numbered().iter().enumerate() {
+        for level in numbered().iter() {
             if level.repeat {
                 let allow = Allow {
                     repeat: false,
@@ -2024,7 +2164,7 @@ mod tests {
                 assert!(
                     without > level.slots,
                     "level {} fits in {without} blocks without repeat",
-                    i + 1
+                    level.id
                 );
             }
         }
@@ -2032,7 +2172,7 @@ mod tests {
 
     #[test]
     fn axe_levels_need_the_axe() {
-        for (i, level) in numbered().iter().enumerate() {
+        for level in numbered().iter() {
             if level.chop {
                 let allow = Allow {
                     chop: false,
@@ -2043,7 +2183,7 @@ mod tests {
                     fewest_blocks(level, allow),
                     None,
                     "level {} can be done without the axe",
-                    i + 1
+                    level.id
                 );
             }
         }
@@ -2051,7 +2191,7 @@ mod tests {
 
     #[test]
     fn cloud_levels_need_to_look() {
-        for (i, level) in numbered().iter().enumerate() {
+        for level in numbered().iter() {
             if !level.mysteries.is_empty() {
                 let allow = Allow {
                     if_chop: false,
@@ -2061,7 +2201,7 @@ mod tests {
                     fewest_blocks(level, allow),
                     None,
                     "level {} can be done without looking",
-                    i + 1
+                    level.id
                 );
             }
         }
@@ -2069,9 +2209,9 @@ mod tests {
 
     #[test]
     fn mysteries_always_include_a_tree_and_grass() {
-        let pair = Level::parse(&level(&["R??"]).with_tree_if());
+        let pair = Level::parse(&level("test", &["R??"]).with_tree_if());
         assert_eq!(pair.outcomes().len(), 2);
-        let single = Level::parse(&level(&["R?"]).with_tree_if());
+        let single = Level::parse(&level("test", &["R?"]).with_tree_if());
         assert_eq!(single.outcomes(), vec![vec![false], vec![true]]);
         // Two trees can't happen, so it tosses again.
         let mut tosses = [true, true, true, false].into_iter();
@@ -2086,7 +2226,7 @@ mod tests {
 
     #[test]
     fn robot_bumps_and_chops() {
-        let mut world = Level::parse(&level(&["R#", ".@"])).world();
+        let mut world = Level::parse(&level("test", &["R#", ".@"])).world();
         assert!(world.act(Cmd::Move(Dir::Right)).is_err());
         assert!(world.act(Cmd::Move(Dir::Up)).is_err());
         assert!(world.act(Cmd::Chop(Dir::Down)).is_err(), "can't chop grass");
@@ -2100,7 +2240,7 @@ mod tests {
 
     #[test]
     fn ice_slides_until_something_stops_it() {
-        let mut world = Level::parse(&level(&["R~~.~~@", "~~~~~~~", "*~~~~~~"])).world();
+        let mut world = Level::parse(&level("test", &["R~~.~~@", "~~~~~~~", "*~~~~~~"])).world();
         let moved = |from| Event::Moved {
             from,
             star: false,
@@ -2123,7 +2263,7 @@ mod tests {
 
     #[test]
     fn keys_open_doors() {
-        let mut world = Level::parse(&level(&["kRD.", "..D*"])).world();
+        let mut world = Level::parse(&level("test", &["kRD.", "..D*"])).world();
         assert!(world.act(Cmd::Move(Dir::Right)).is_err(), "locked");
         let got = world.act(Cmd::Move(Dir::Left));
         assert!(matches!(got, Ok(Event::Moved { key: true, .. })));
@@ -2143,7 +2283,7 @@ mod tests {
 
     #[test]
     fn sliding_stops_at_a_door_even_with_a_key() {
-        let mut world = Level::parse(&level(&["kR~~D*"])).world();
+        let mut world = Level::parse(&level("test", &["kR~~D*"])).world();
         world.act(Cmd::Move(Dir::Right)).unwrap();
         assert_eq!(world.pos, (3, 0), "no key yet: stopped at the door");
         world.act(Cmd::Move(Dir::Left)).unwrap();
@@ -2163,7 +2303,7 @@ mod tests {
 
     #[test]
     fn key_levels_need_the_keys() {
-        for (i, level) in numbered().iter().enumerate() {
+        for level in numbered().iter() {
             if !level.keys.is_empty() {
                 let mut without = level.clone();
                 without.keys.clear();
@@ -2173,7 +2313,7 @@ mod tests {
                     fewest_blocks(&without, Allow::level(&without)),
                     None,
                     "level {} can be done without a key",
-                    i + 1
+                    level.id
                 );
             }
         }

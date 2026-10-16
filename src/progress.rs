@@ -1,6 +1,7 @@
 //! Which levels have been finished, for each of the three players, saved
-//! between games as a list of level keys (numbers, and `d13` and so on for
-//! demos) in a small text file per player.
+//! between games as a list of level keys (each level's name for the save
+//! files, which never changes: see `LevelDef::id`) in a small text file per
+//! player.
 
 use std::collections::HashSet;
 

@@ -12,42 +12,46 @@ stars. There's no reading required.
 |---|---|
 | ![Three players, each with their own robot and progress](docs/players.png) | ![Level 48: the main program calls the ● and ▲ functions, and the robot is partway through ▲, chopping a tree](docs/level.png) |
 
-Across 79 levels it introduces:
+Across 82 levels in 14 chapters, numbered within each chapter (`3-2`), it
+introduces, in the order programming is usually taught:
 
-- **Sequences:** up, down, left and right, in order
-- **Debugging:** when the robot bumps into something, the step that went wrong
-  shakes red, and the program stays put to be fixed. Tapping a block opens an
-  empty slot before it for a missing step, and the eraser that appears on a
-  block under the pointer takes it out
-- **Actions:** an axe block chops down trees (but not rocks)
-- **Repeat:** run one block several times when there aren't enough slots
-- **If:** mystery clouds become a tree or grass each run, so the robot has to
-  look before it chops: "if there's a tree to the right { chop it }". Tap
-  "if", pick what to look for (shown as map tiles: a tree, rock, star, ice,
-  key, door, grass, or the edge of the map, whichever the level offers), then
-  which way. The blocks to run go inside its brackets
-- **Loops:** repeat a whole group of blocks
-- **If inside loops:** "if there's a tree to the right { chop it }" or "if
-  there's a star above { fetch it }" in a loop: one rule handles whatever the
-  robot finds, wherever it finds it
-- **Functions:** extra strips of blocks named with a shape (● and ▲) that the
-  main program calls whenever it needs them
-- **Ice:** the robot slides until grass, a rock or the edge stops it, so it
-  has to think ahead about where it will end up (and sometimes go the long
-  way round)
-- **Keys and doors:** a locked door needs a key, and each key opens one door.
-  The robot remembers what it's carrying, so the order matters: fetch the key
-  first, even when it's the other way
-- **Repeat until:** "keep going until there's a wall that way". The robot
-  looks before each time round. Mystery clouds decide how far it is, so no
-  fixed number of times would do. One that would go round for ever (back
-  where it started, and still no wall) stops and shakes red
-- **Else:** "if there's a tree to the right { go down } otherwise { go
-  right }". The grey ✗ between the blocks marks where the "otherwise" part
-  starts
-- **Functions with a number:** call ● with a number (set with repeat), and
-  inside it a count can be "●'s number" instead of a fixed one, so one
-  function makes stairs of 1, 2 and 3
+1. **Moving:** up, down, left and right, in order
+2. **Ice:** the robot slides until grass, a rock or the edge stops it, so it
+   has to think ahead about where it will end up (and sometimes go the long
+   way round)
+3. **The axe:** chop down trees (but not rocks)
+4. **Keys and doors:** a locked door needs a key, and each key opens one
+   door. The robot remembers what it's carrying, so the order matters: fetch
+   the key first, even when it's the other way
+5. **Repeat:** run one block several times when there aren't enough slots
+6. **If:** mystery clouds become a tree or grass each run, so the robot has
+   to look before it chops: "if there's a tree to the right { chop it }". Tap
+   "if", pick what to look for (shown as map tiles: a tree, rock, star, ice,
+   key, door, grass, or the edge of the map, whichever the level offers),
+   then which way. The blocks to run go inside its brackets
+7. **Loops:** repeat a whole group of blocks
+8. **If inside loops:** "if there's a tree to the right { chop it }" or "if
+   there's a star above { fetch it }" in a loop: one rule handles whatever
+   the robot finds, wherever it finds it
+9. **Else:** "if there's a tree to the right { go down } otherwise { go
+   right }". The grey ✗ between the blocks marks where the "otherwise" part
+   starts
+10. **Repeat until:** "keep going until there's a wall that way". The robot
+    looks before each time round. Mystery clouds decide how far it is, so no
+    fixed number of times would do. One that would go round for ever (back
+    where it started, and still no wall) stops and shakes red
+11. **Functions:** extra strips of blocks named with a shape (● and ▲) that
+    the main program calls whenever it needs them
+12. **Functions that look:** "if" blocks inside functions
+13. **Functions with a number:** call ● with a number (set with repeat), and
+    inside it a count can be "●'s number" instead of a fixed one, so one
+    function makes stairs of 1, 2 and 3
+14. **Everything together**
+
+Throughout, **debugging**: when the robot bumps into something, the step
+that went wrong shakes red, and the program stays put to be fixed. Tapping a
+block opens an empty slot before it for a missing step, and the eraser that
+appears on a block under the pointer takes it out.
 
 Each new block is first shown in a demo level (▶ on the map): the program is
 already written, so just press play and watch how it's used. Then each new
@@ -154,11 +158,13 @@ version to GitHub Pages (`.github/workflows/pages.yml`).
 
 ## Levels
 
-Levels live in `src/level.rs` as small text maps: `R` robot, `*` star,
-`#` tree, `@` rock, `?` mystery, `~` ice, `k` key, `D` locked door and
-`.` grass. A demo level adds its program
-as text with `.demo(...)`. Demos aren't numbered, so adding one never
-renumbers the levels in anyone's save. `cargo test` proves that every
+Levels live in `src/level.rs`, in chapters, as small text maps: `R` robot,
+`*` star, `#` tree, `@` rock, `?` mystery, `~` ice, `k` key, `D` locked door
+and `.` grass. A demo level adds its program as text with `.demo(...)`.
+Each level has a name for the save files that never changes, however the
+levels are moved around: the levels used to be numbered straight through,
+1 to 79, and those numbers are their names (`d13` for the demo before 13),
+so old saves still work. New levels get a name instead. `cargo test` proves that every
 level can be solved within its slots, and that each tool is actually needed
 where it's introduced.
 
@@ -166,5 +172,5 @@ Bumping into a rock, a tree, a locked door or the edge of the map stops the
 program; it isn't a harmless "stay put" (unlike sliding on ice into something,
 which is just how the slide stops). The levels depend on this: if bumps did
 nothing, the robot could walk into a wall on purpose to line itself up, and
-some levels could be done without the tool they teach (levels 27 and 41
-without an "if", 45 without a function).
+some levels could be done without the tool they teach (levels 6-1 and 8-1
+without an "if", 11-2 without a function).

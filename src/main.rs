@@ -636,11 +636,21 @@ fn draw_play_icon(c: Vec2, r: f32, color: Color) {
     );
 }
 
-/// A level's number, or for a demo (which is for watching) a play sign.
+/// A level's chapter and number (`3-2`), or for a demo (which is for
+/// watching) a play sign.
 fn draw_level_label(level: &Level, c: Vec2, size: f32, color: Color) {
     match level.demo {
         Some(_) => draw_play_icon(c + vec2(size * 0.06, 0.0), size * 0.95, color),
-        None => draw_label(&level.number.to_string(), c, size, color),
+        None => {
+            let label = level.label();
+            // Smaller, so two-digit chapters still fit.
+            let size = if label.len() > 3 {
+                size * 0.75
+            } else {
+                size * 0.85
+            };
+            draw_label(&label, c, size, color)
+        }
     }
 }
 
@@ -941,6 +951,17 @@ impl Game {
         game.load(idx);
         game.count_finished();
         game
+    }
+
+    /// A level's colour: its chapter's, from the idea the chapter starts
+    /// with. (A made-up map has no chapter: its own.)
+    fn colour_of(&self, level: &Level) -> Color {
+        let first = self
+            .levels
+            .iter()
+            .find(|l| l.chapter == level.chapter && level.chapter > 0)
+            .unwrap_or(level);
+        Kind::of(first).colour()
     }
 
     fn sfx(&self, sfx: Sfx) {
@@ -2072,14 +2093,19 @@ impl Game {
         if self.mode == Mode::Win && self.timer > 0.8 {
             self.draw_next_prompt();
         }
-        // The level's number, next to the map button.
-        let c = vec2(104.0, 36.0);
-        draw_circle(c.x, c.y, 22.0, WHITE);
-        draw_circle(c.x, c.y, 19.0, Kind::of(self.level()).colour());
+        // The level's chapter and number, next to the map button, and the
+        // chapter's name.
+        let c = vec2(116.0, 36.0);
+        let colour = self.colour_of(self.level());
+        rounded_rect(c.x - 34.0, c.y - 22.0, 68.0, 44.0, 22.0, WHITE);
+        rounded_rect(c.x - 31.0, c.y - 19.0, 62.0, 38.0, 19.0, colour);
         if self.custom.is_some() {
             maker::draw_pencil_icon(c, 15.0, WHITE);
         } else {
-            draw_level_label(self.level(), c, 26.0, WHITE);
+            draw_level_label(self.level(), c, 30.0, WHITE);
+            let name = level::chapter_name(self.level().chapter);
+            let w = measure_text(name, None, 26, 1.0).width;
+            draw_label(name, vec2(c.x + 46.0 + w / 2.0, c.y), 26.0, INK);
         }
     }
 
@@ -2220,8 +2246,7 @@ impl Game {
         }
         for i in 0..n {
             let c = self.map_node(i);
-            let kind = Kind::of(&self.levels[i]);
-            let colour = kind.colour();
+            let colour = self.colour_of(&self.levels[i]);
             let mut r = 34.0;
             if (self.mouse - c).length() < 40.0 {
                 r += 5.0;
