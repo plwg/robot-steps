@@ -905,6 +905,8 @@ enum Button {
     While,
     /// Leave the loop it's in.
     Break,
+    /// End the "if" (or loop) whose menu is showing: its `]`.
+    Close,
     /// Make the last count in a function "the number it's called with".
     Number,
     /// Add a call to function 1 or 2.
@@ -1854,6 +1856,24 @@ impl Game {
         }
     }
 
+    /// End the open loop, and any "if" left open inside it.
+    fn close_loop(&mut self) {
+        if open_if(self.prog()).is_some() {
+            self.insert(Item::IfEnd);
+        }
+        self.insert(Item::LoopEnd);
+    }
+
+    /// Is `button` (else, or break) there to be tapped now, for a menu?
+    fn offers(&self, button: Button) -> bool {
+        self.visible(button) && self.enabled(button)
+    }
+
+    /// Is the menu for ending an "if" (else) or a loop (break) showing?
+    fn ending(&self) -> bool {
+        matches!(self.armed, Some(Button::Else | Button::Break))
+    }
+
     fn start_if_true(&mut self) {
         self.armed = None;
         self.if_not = false;
@@ -1931,7 +1951,7 @@ impl Game {
         match button {
             // While choosing what to look for, the arrows wait until
             // something's picked.
-            Button::Arrow(_) => editing && self.can_place() && !self.picking(),
+            Button::Arrow(_) => editing && self.can_place() && !self.picking() && !self.ending(),
             Button::Axe | Button::Sleep | Button::Sense(_) | Button::Not => {
                 editing && self.can_place()
             }
@@ -1960,6 +1980,7 @@ impl Game {
             Button::Call(_) => editing && self.editing == 0 && self.can_place(),
             Button::Repeat => editing && self.count_slot().is_some(),
             Button::Clear => editing && !self.prog().is_empty(),
+            Button::Close => editing,
             Button::Undo => editing && (self.armed.is_some() || !self.prog().is_empty()),
             Button::Play => self.running() || (editing && self.has_actions()),
             Button::Fullscreen | Button::Sound | Button::Map => true,
@@ -2015,23 +2036,28 @@ impl Game {
             Button::Sense(_) => self.armed = Some(button),
             Button::Not => self.if_not = !self.if_not,
             Button::Repeat => self.set_times(self.next_times()),
+            // With a loop open, the button ends it, or with a break to offer,
+            // shows a menu of break and the end. Tapped again: never mind.
             Button::Loop => match open_loop(self.prog()) {
+                _ if self.armed == Some(Button::Break) => self.armed = None,
                 // Tapped again straight away: never mind.
                 Some(start) if self.last_added == Some(start) => self.remove_last_added(),
-                Some(_) => {
-                    // Closing the loop closes any "if" left open inside it.
-                    if open_if(self.prog()).is_some() {
-                        self.insert(Item::IfEnd);
-                    }
-                    self.insert(Item::LoopEnd);
-                }
+                Some(_) if self.offers(Button::Break) => self.armed = Some(Button::Break),
+                Some(_) => self.close_loop(),
                 None => self.insert(Item::LoopStart { times: 2 }),
+            },
+            Button::Close => match self.armed.take() {
+                Some(Button::Else) => self.insert(Item::IfEnd),
+                _ => self.close_loop(),
             },
             // With an "if" open, the button closes it. Otherwise tap it, pick
             // what to look for (straight away if there's only one), then a
             // direction. Tapping it again while choosing: never mind.
+            // The same for an "if", with "else" in its menu.
             Button::If => match open_if(self.prog()) {
+                _ if self.armed == Some(Button::Else) => self.armed = None,
                 Some(start) if self.last_added == Some(start) => self.remove_last_added(),
+                Some(_) if self.offers(Button::Else) => self.armed = Some(Button::Else),
                 Some(_) => self.insert(Item::IfEnd),
                 None if self.armed_if() => self.armed = None,
                 None => {
@@ -2049,13 +2075,10 @@ impl Game {
             },
             // Like a loop, but tap it then pick which way to look.
             Button::While => match open_loop(self.prog()) {
+                _ if self.armed == Some(Button::Break) => self.armed = None,
                 Some(start) if self.last_added == Some(start) => self.remove_last_added(),
-                Some(_) => {
-                    if open_if(self.prog()).is_some() {
-                        self.insert(Item::IfEnd);
-                    }
-                    self.insert(Item::LoopEnd);
-                }
+                Some(_) if self.offers(Button::Break) => self.armed = Some(Button::Break),
+                Some(_) => self.close_loop(),
                 // Tapped again while choosing: never mind.
                 None if self.armed == Some(button) => self.armed = None,
                 // Pick what to look for, unless there's only one thing.
@@ -2522,6 +2545,10 @@ impl Game {
                 }
             };
         }
+        // Ending an "if" or a loop: "else" (or break), or the end itself.
+        if let Some(extra) = self.armed.filter(|_| self.ending()) {
+            return vec![vec![extra, Button::Close]];
+        }
         let tools: Vec<Button> = [
             Button::Axe,
             Button::Sleep,
@@ -2529,8 +2556,6 @@ impl Game {
             Button::Loop,
             Button::While,
             Button::If,
-            Button::Else,
-            Button::Break,
             Button::Call(1),
             Button::Call(2),
             Button::Number,
@@ -2597,6 +2622,8 @@ impl Game {
             Button::Else => "Otherwise",
             Button::While => "While...",
             Button::Break => "Break: leave the loop",
+            Button::Close if self.armed == Some(Button::Else) => "End the if",
+            Button::Close => "End the loop",
             Button::Number => "The function's number",
             Button::Call(1) => "Run the circle function",
             Button::Call(_) => "Run the triangle function",
@@ -3955,6 +3982,8 @@ impl Game {
                 Button::If | Button::Sense(_) | Button::Not | Button::Else => (IF_LIME, 18.0),
                 Button::While => (REPEAT_TEAL, 18.0),
                 Button::Break => (BREAK_PLUM, 18.0),
+                Button::Close if self.armed == Some(Button::Else) => (IF_LIME, 18.0),
+                Button::Close => (REPEAT_TEAL, 18.0),
                 Button::Number => (CALL_INK, 18.0),
                 Button::Call(_) => (CALL_INK, 18.0),
                 Button::Play if self.running() => (STOP_RED, half),
@@ -3974,7 +4003,7 @@ impl Game {
                 Button::If => open_if(self.prog()).is_some() || self.armed_if(),
                 _ => false,
             };
-            if self.armed == Some(button) || open_loop {
+            if (self.armed == Some(button) && !self.ending()) || open_loop {
                 let g = 6.0 + ((self.time * 6.0).sin() * 0.5 + 0.5) * 4.0;
                 rounded_rect(
                     c.x - half - g,
@@ -4044,6 +4073,10 @@ impl Game {
                 }
                 Button::Else => draw_answer(c, false),
                 Button::Break => draw_break_icon(c, size),
+                Button::Close => {
+                    let r = Rect::new(c.x - half, c.y - half, size, size);
+                    draw_bracket(r, c.x + size * 0.1, false, WHITE);
+                }
                 // While a loop is open, the button shows how to close it.
                 Button::While if open_loop => {
                     let r = Rect::new(c.x - half, c.y - half, size, size);

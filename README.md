@@ -105,6 +105,10 @@ maps.
   rain), right where the run stops, with the rest of the program faded
   after it. Play always runs from the start, picks the mystery clouds again,
   and the slider follows that run.
+- **Fewer buttons:** blocks that only make sense inside another one are in a
+  second menu. Tapping "if" shows what it can look for (and "not"); tapped
+  while an "if" is open, it shows "else" and the end of the "if" (`]`).
+  Loops and "while" do the same, with break.
 - **Debugging:** when the robot bumps into something, the step that went
   wrong shakes red, and the program stays put to be fixed. Tapping a block
   opens an empty slot before it for a missing step, and the eraser that
