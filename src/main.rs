@@ -1771,7 +1771,10 @@ impl Game {
     fn enabled(&self, button: Button) -> bool {
         let editing = self.mode == Mode::Edit;
         match button {
-            Button::Arrow(_) | Button::Axe | Button::Sleep | Button::Sense(_) | Button::Not => {
+            // While choosing what to look for, the arrows wait until
+            // something's picked.
+            Button::Arrow(_) => editing && self.can_place() && !self.picking(),
+            Button::Axe | Button::Sleep | Button::Sense(_) | Button::Not => {
                 editing && self.can_place()
             }
             // A loop can hold an "if", but an "if" can't hold a loop.
@@ -1825,7 +1828,9 @@ impl Game {
                         return;
                     }
                     Some(Button::Until) => {
-                        let sense = self.until_look.take().unwrap_or(Sense::Wall);
+                        let Some(sense) = self.until_look.take() else {
+                            return;
+                        };
                         let not = std::mem::take(&mut self.if_not);
                         self.insert(Item::Until { sense, dir, not });
                         return;
@@ -3757,8 +3762,7 @@ impl Game {
                 Button::Arrow(dir) => match self.armed {
                     Some(Button::Axe) => draw_chop_icon(c, size, dir),
                     Some(Button::Sense(sense)) => draw_if_icon(c, size, sense, dir, self.if_not),
-                    Some(Button::Until) => {
-                        let sense = self.until_look.unwrap_or(Sense::Wall);
+                    Some(Button::Until) if let Some(sense) = self.until_look => {
                         draw_until_icon(c, size, dir, sense, self.if_not)
                     }
                     _ => draw_arrow(c, size * 0.8, dir, WHITE),
