@@ -30,8 +30,8 @@ pub enum Tool {
     Sleep,
     Repeat,
     Loops,
-    /// "Repeat until there's a wall".
-    Until,
+    /// "While" (saved as "until", its old name).
+    While,
     /// The "if" block. It can look for anything on the map, or the edge.
     If,
     Else,
@@ -42,23 +42,26 @@ pub enum Tool {
     Fn2,
     /// Functions called with a number.
     Numbers,
+    /// The break block, and "while true".
+    Break,
 }
 
 impl Tool {
     /// In the order they're shown, and saved: each comes after the blocks it
     /// needs.
-    pub const ALL: [Tool; 11] = [
+    pub const ALL: [Tool; 12] = [
         Tool::Axe,
         Tool::Sleep,
         Tool::Repeat,
         Tool::Loops,
-        Tool::Until,
+        Tool::While,
         Tool::If,
         Tool::Else,
         Tool::Not,
         Tool::Fn1,
         Tool::Fn2,
         Tool::Numbers,
+        Tool::Break,
     ];
 
     fn name(self) -> &'static str {
@@ -66,7 +69,7 @@ impl Tool {
             Tool::Axe => "axe",
             Tool::Repeat => "repeat",
             Tool::Loops => "loops",
-            Tool::Until => "until",
+            Tool::While => "until",
             Tool::Else => "else",
             Tool::Numbers => "numbers",
             Tool::Sleep => "wait",
@@ -74,6 +77,7 @@ impl Tool {
             Tool::If => "if",
             Tool::Fn1 => "fn1",
             Tool::Fn2 => "fn2",
+            Tool::Break => "break",
         }
     }
 }
@@ -91,12 +95,13 @@ pub struct CustomMap {
     repeat: bool,
     loops: bool,
     ifs: bool,
-    until: bool,
+    whiles: bool,
     otherwise: bool,
     functions: usize,
     numbers: bool,
     sleep: bool,
     not: bool,
+    breaks: bool,
 }
 
 impl CustomMap {
@@ -112,12 +117,13 @@ impl CustomMap {
             repeat: false,
             loops: false,
             ifs: false,
-            until: false,
+            whiles: false,
             otherwise: false,
             functions: 0,
             numbers: false,
             sleep: false,
             not: false,
+            breaks: false,
         };
         map.paint(0, 1, 'R');
         map.paint(5, 2, '*');
@@ -173,13 +179,14 @@ impl CustomMap {
             Tool::Repeat => self.repeat,
             Tool::Loops => self.loops,
             Tool::If => self.ifs,
-            Tool::Until => self.until,
+            Tool::While => self.whiles,
             Tool::Else => self.otherwise,
             Tool::Fn1 => self.functions >= 1,
             Tool::Fn2 => self.functions >= 2,
             Tool::Numbers => self.numbers,
             Tool::Sleep => self.sleep,
             Tool::Not => self.not,
+            Tool::Break => self.breaks,
         }
     }
 
@@ -190,14 +197,15 @@ impl CustomMap {
     /// Turn a block on or off. Some blocks need others: loops need repeat
     /// (for their count), and "repeat until" and functions need loops, just
     /// as in the game's own levels. The second function needs the
-    /// first, "else" needs an "if", and numbers need a function.
+    /// first, "else" needs an "if", numbers need a function, and a break
+    /// needs a loop and an "if" (to decide when).
     pub fn toggle(&mut self, tool: Tool) {
         let on = !self.has(tool);
         match tool {
             Tool::Axe => self.axe = on,
             Tool::Repeat => self.repeat = on,
             Tool::Loops => self.loops = on,
-            Tool::Until => self.until = on,
+            Tool::While => self.whiles = on,
             Tool::If => self.ifs = on,
             Tool::Else => self.otherwise = on,
             Tool::Fn1 => self.functions = usize::from(on),
@@ -205,20 +213,23 @@ impl CustomMap {
             Tool::Numbers => self.numbers = on,
             Tool::Sleep => self.sleep = on,
             Tool::Not => self.not = on,
+            Tool::Break => self.breaks = on,
         }
         if on {
-            self.ifs |= self.otherwise || self.not;
+            self.ifs |= self.otherwise || self.not || self.breaks;
+            self.loops |= self.breaks;
             if self.numbers && self.functions == 0 {
                 self.functions = 1;
             }
-            self.loops |= self.until || self.functions > 0;
+            self.loops |= self.whiles || self.functions > 0;
             self.repeat |= self.loops;
         } else if !self.repeat {
             self.loops = false;
         }
         if !self.loops {
-            (self.until, self.functions) = (false, 0);
+            (self.whiles, self.functions, self.breaks) = (false, 0, false);
         }
+        self.breaks &= self.ifs;
         self.otherwise &= self.ifs;
         self.not &= self.ifs;
         self.numbers &= self.functions > 0;
@@ -260,24 +271,25 @@ impl CustomMap {
                     Sense::Key => on_map('k'),
                     Sense::Door => on_map('D'),
                     Sense::Star | Sense::Grass | Sense::Edge => true,
-                    Sense::Wall => false,
+                    Sense::Wall | Sense::True => false,
                 })
                 .collect();
         }
-        level.until = self.until;
-        // "Repeat until" can look for whatever an "if" could (a rock would
-        // look just like a wall, so not that).
-        if self.until {
+        level.whiles = self.whiles;
+        level.breaks = self.breaks;
+        // "While" can look for whatever an "if" could.
+        if self.whiles {
             let on_map = |c: char| self.cells.contains(&c);
-            level.until_looks = Sense::ALL
+            level.while_looks = Sense::ALL
                 .into_iter()
                 .filter(|s| match s {
                     Sense::Tree => on_map('#') || clouds,
+                    Sense::Rock => on_map('@'),
                     Sense::Ice => on_map('~'),
                     Sense::Key => on_map('k'),
                     Sense::Door => on_map('D'),
                     Sense::Star | Sense::Grass | Sense::Edge => true,
-                    Sense::Rock | Sense::Wall => false,
+                    Sense::Wall | Sense::True => false,
                 })
                 .collect();
         }
@@ -432,7 +444,7 @@ mod tests {
     #[test]
     fn blocks_bring_what_they_need() {
         let mut m = CustomMap::new();
-        m.toggle(Tool::Until);
+        m.toggle(Tool::While);
         assert!(m.has(Tool::Loops) && m.has(Tool::Repeat));
         m.toggle(Tool::Fn2);
         assert_eq!(m.functions(), 2);
@@ -442,7 +454,7 @@ mod tests {
         );
         // Without repeat there's nothing to count loops with.
         m.toggle(Tool::Repeat);
-        assert!(!m.has(Tool::Loops) && !m.has(Tool::Until) && m.functions() == 0);
+        assert!(!m.has(Tool::Loops) && !m.has(Tool::While) && m.functions() == 0);
         m.toggle(Tool::Fn1);
         m.toggle(Tool::Fn1);
         assert_eq!(m.functions(), 0);
@@ -456,22 +468,22 @@ mod tests {
         assert_eq!(m.functions(), 1);
         m.toggle(Tool::Fn1);
         assert!(!m.has(Tool::Numbers));
-        m.toggle(Tool::Until);
+        m.toggle(Tool::While);
         assert!(m.has(Tool::Loops));
         m.toggle(Tool::Loops);
-        assert!(!m.has(Tool::Until));
+        assert!(!m.has(Tool::While));
     }
 
     #[test]
     fn new_blocks_are_saved_and_played() {
         let mut m = CustomMap::new();
-        for tool in [Tool::Until, Tool::Else, Tool::Numbers] {
+        for tool in [Tool::While, Tool::Else, Tool::Numbers] {
             m.toggle(tool);
         }
         let maps = parse(&format(std::slice::from_ref(&m)));
         assert_eq!(maps, [m.clone()]);
         let level = m.to_level();
-        assert!(level.until && level.otherwise && level.numbers && !level.ifs.is_empty());
+        assert!(level.whiles && level.otherwise && level.numbers && !level.ifs.is_empty());
     }
 
     #[test]

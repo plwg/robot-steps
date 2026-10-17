@@ -129,7 +129,7 @@ pub struct Block {
     pub times: u8,
 }
 
-/// What an "if" block (or a "repeat until") looks for, next to the robot.
+/// What an "if" block (or a "while") looks for, next to the robot.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Sense {
     Tree,
@@ -145,8 +145,11 @@ pub enum Sense {
     Edge,
     /// Anything the robot can't drive onto: a rock, a tree, a locked door it
     /// has no key for, or the edge of the map (but not rain, which passes).
-    /// Only "repeat until" looks for it.
+    /// Not offered any more (it looks just like a rock); program text
+    /// still has it.
     Wall,
+    /// Always there: "while true" goes round for ever, until a break.
+    True,
 }
 
 impl Sense {
@@ -166,7 +169,7 @@ impl Sense {
     fn from_letter(letter: char) -> Sense {
         *Sense::ALL
             .iter()
-            .chain([&Sense::Wall])
+            .chain([&Sense::Wall, &Sense::True])
             .find(|s| s.letter() == letter)
             .expect("bad sense")
     }
@@ -183,6 +186,7 @@ impl Sense {
             Sense::Grass => 'g',
             Sense::Edge => 'e',
             Sense::Wall => 'w',
+            Sense::True => 'y',
         }
     }
 }
@@ -191,9 +195,9 @@ impl Sense {
 /// call to a function.
 ///
 /// Blocks between a `LoopStart` and the next `LoopEnd` (or the end of the
-/// strip, if the loop is still open) run `times` times over. An `Until` loop
-/// ends the same way, but runs until the robot sees a wall in direction `dir`
-/// (looking before each time round). Blocks between an `IfStart` and the next
+/// strip, if the loop is still open) run `times` times over. A `While` loop
+/// ends the same way, but runs while the robot sees `sense` in direction
+/// `dir` (or with `not`, while it doesn't), looking before each time round. Blocks between an `IfStart` and the next
 /// `IfEnd` (or the end of the loop or strip it's in) only run if the robot sees
 /// `sense` next to it in direction `dir`; if there's an `Else` in between, the
 /// blocks after it run instead when it doesn't.
@@ -203,9 +207,9 @@ pub enum Item {
     LoopStart {
         times: u8,
     },
-    /// Runs until the robot sees `sense` in direction `dir` (or with
-    /// `not`, until it doesn't).
-    Until {
+    /// Runs while the robot sees `sense` in direction `dir` (or with `not`,
+    /// while it doesn't).
+    While {
         sense: Sense,
         dir: Dir,
         not: bool,
@@ -226,6 +230,8 @@ pub enum Item {
     /// An empty slot opened up in the middle of a program, waiting for a
     /// block. Running skips it.
     Gap,
+    /// Leave the loop (or "while") it's in, straight away.
+    Break,
 }
 
 /// How many tiles a strip uses. Loop brackets, "else" and the end of an
@@ -240,7 +246,12 @@ impl Item {
     pub fn is_tile(self) -> bool {
         matches!(
             self,
-            Item::Block(_) | Item::Call(..) | Item::IfStart { .. } | Item::Until { .. } | Item::Gap
+            Item::Block(_)
+                | Item::Call(..)
+                | Item::IfStart { .. }
+                | Item::While { .. }
+                | Item::Gap
+                | Item::Break
         )
     }
 }
@@ -256,9 +267,11 @@ pub enum Step {
     Do(Cmd),
     /// Look in direction `dir` for `sense`: `yes` if it's there.
     Test { sense: Sense, dir: Dir, yes: bool },
-    /// A "repeat until" that would go round for ever: it's back where it
-    /// started a time round before, and still no wall. The program stops.
+    /// A "while" that would go round for ever: it's back where it started a
+    /// time round before, and still going. The program stops.
     Forever,
+    /// A break: leaving the loop it's in.
+    Break,
 }
 
 /// One step in a running program, with what to show while it happens.
@@ -308,6 +321,8 @@ struct Runner<'a> {
     ran: Option<usize>,
     /// Too many steps to unroll after the end: give up.
     halted: bool,
+    /// A break is leaving the loops it's in, up to the nearest one.
+    breaking: bool,
 }
 
 /// The most steps a program is unrolled to, after its end.
@@ -341,6 +356,7 @@ pub fn simulate(strips: &[Vec<Item>], world: &World) -> Simulation {
         worlds: Vec::new(),
         ran: None,
         halted: false,
+        breaking: false,
     };
     if !strips.is_empty() {
         let top = Context {
@@ -396,7 +412,7 @@ impl Runner<'_> {
     ) {
         let items = &self.strips[strip];
         let mut i = from;
-        while i < to && !self.halted {
+        while i < to && !self.halted && !self.breaking {
             match items[i] {
                 Item::LoopStart { times } => {
                     let end = (i + 1..to)
@@ -405,10 +421,13 @@ impl Runner<'_> {
                     let times = ctx.count(times);
                     for k in 0..times {
                         self.run(strip, i + 1, end, Some((i, times - k)), ctx);
+                        if std::mem::take(&mut self.breaking) {
+                            break;
+                        }
                     }
                     i = end + 1;
                 }
-                Item::Until { sense, dir, not } => {
+                Item::While { sense, dir, not } => {
                     let end = (i + 1..to)
                         .find(|&j| items[j] == Item::LoopEnd)
                         .unwrap_or(to);
@@ -418,7 +437,7 @@ impl Runner<'_> {
                     while !self.halted {
                         let yes = self.world.sees(sense, dir) != not;
                         self.emit(Step::Test { sense, dir, yes }, (strip, i), 1, in_loop, ctx);
-                        if yes {
+                        if !yes {
                             break;
                         }
                         if !been.insert(self.world.clone()) {
@@ -430,6 +449,9 @@ impl Runner<'_> {
                             break;
                         }
                         self.run(strip, i + 1, end, Some((i, 0)), ctx);
+                        if std::mem::take(&mut self.breaking) {
+                            break;
+                        }
                     }
                     i = end + 1;
                 }
@@ -460,6 +482,13 @@ impl Runner<'_> {
                         number,
                     };
                     self.run(f, 0, self.strips[f].len(), None, inner);
+                    // A break outside a loop just ends the function.
+                    self.breaking = false;
+                    i += 1;
+                }
+                Item::Break => {
+                    self.emit(Step::Break, (strip, i), 1, in_loop, ctx);
+                    self.breaking = true;
                     i += 1;
                 }
                 Item::Call(..) | Item::LoopEnd | Item::Else | Item::IfEnd | Item::Gap => i += 1,
@@ -470,13 +499,14 @@ impl Runner<'_> {
 
 /// A whole program written as text: strips separated by `|`. Within a strip,
 /// `R` moves right, `cR` chops right, `Z` sleeps, and a number repeats a
-/// block. `[` opens a loop and `]4` closes it, running it 4 times; `<R`
-/// opens a loop that runs until there's a wall to the right, closed with `]`.
+/// block. `[` opens a loop and `]4` closes it, running it 4 times; `<gR`
+/// opens a loop that runs while there's grass to the right, closed with `]`.
 /// `{tR` starts "if there's a tree to the right", `{sU` "if there's a star
 /// above" (see `Sense::letter` for the rest), and `{!tR` "if there's no
 /// tree to the right"; `/` is "else" and `}` ends it. `f1` calls the first function, and
 /// `f1n3` calls it with the number 3; inside a function, `#` in place of a
-/// count (`R#`, `]#`) means that number.
+/// count (`R#`, `]#`) means that number. `<y` opens "while true", and `B` is
+/// a break.
 pub fn parse_strips(text: &str) -> Vec<Vec<Item>> {
     text.split('|').map(parse_program).collect()
 }
@@ -515,10 +545,19 @@ pub fn parse_program(text: &str) -> Vec<Item> {
         let item = match (chars.next(), chars.next()) {
             (Some('}'), None) => Item::IfEnd,
             (Some('/'), None) => Item::Else,
-            // `<R` goes on until a wall; `<sR` until a star, `<!tR` until
-            // there's no tree.
+            // `<gR` goes on while there's grass to the right, `<!tR` while
+            // there's no tree (and `<R`, while there's a wall).
             (Some('<'), Some(first)) => {
                 open = Some(items.len());
+                // "While true" looks no way in particular.
+                if first == 'y' {
+                    items.push(Item::While {
+                        sense: Sense::True,
+                        dir: Dir::Right,
+                        not: false,
+                    });
+                    continue;
+                }
                 let not = first == '!';
                 let first = if not {
                     chars.next().expect("<! needs a sense")
@@ -526,12 +565,12 @@ pub fn parse_program(text: &str) -> Vec<Item> {
                     first
                 };
                 match chars.next() {
-                    None => Item::Until {
+                    None => Item::While {
                         sense: Sense::Wall,
                         dir: dir(first),
                         not,
                     },
-                    Some(d) => Item::Until {
+                    Some(d) => Item::While {
                         sense: Sense::from_letter(first),
                         dir: dir(d),
                         not,
@@ -562,6 +601,7 @@ pub fn parse_program(text: &str) -> Vec<Item> {
                 }
                 Item::LoopEnd
             }
+            (Some('B'), None) => Item::Break,
             (Some('Z'), None) => Item::Block(Block {
                 cmd: Cmd::Sleep,
                 times,
@@ -614,11 +654,13 @@ pub struct LevelDef {
     loops: bool,
     /// What the "if" block can look for (none: no "if" block).
     ifs: &'static [Sense],
-    /// "Repeat until there's a wall", and "else" and "not" for the "if"
-    /// blocks (and "not" for "repeat until" too).
-    until: bool,
-    /// What else "repeat until" can look for, besides a wall.
-    until_looks: &'static [Sense],
+    /// "While", and "else" and "not" for the "if" blocks (and "not" for
+    /// "while" too).
+    whiles: bool,
+    /// What "while" can look for.
+    while_looks: &'static [Sense],
+    /// The break block (and "while true", which goes round until one).
+    breaks: bool,
     otherwise: bool,
     not: bool,
     /// How many function strips (0, 1 or 2), and how many slots each has.
@@ -642,8 +684,9 @@ const fn level(id: &'static str, map: &'static [&'static str]) -> LevelDef {
         repeat: false,
         loops: false,
         ifs: &[],
-        until: false,
-        until_looks: &[],
+        whiles: false,
+        while_looks: &[],
+        breaks: false,
         otherwise: false,
         not: false,
         functions: 0,
@@ -690,16 +733,25 @@ impl LevelDef {
         self.with_loops(slots)
     }
 
-    /// Unlock "repeat until there's a wall" (and loops), and limit the
+    /// Unlock "while" (and loops), looking for `senses`, and limit the
     /// program to `slots`.
-    const fn with_until(mut self, slots: usize) -> Self {
-        self.until = true;
+    const fn with_while(mut self, slots: usize, senses: &'static [Sense]) -> Self {
+        self.whiles = true;
+        self.while_looks = senses;
         self.with_loops(slots)
     }
 
-    /// Let "repeat until" look for `senses` too (as well as a wall).
-    const fn until_looking_for(mut self, senses: &'static [Sense]) -> Self {
-        self.until_looks = senses;
+    /// Unlock the break block, and "while true" to go with it.
+    const fn with_break(mut self) -> Self {
+        self.breaks = true;
+        self
+    }
+
+    /// Only "while" loops: no counted loops, and no counts on blocks either,
+    /// so a "while true" with a break is the way round.
+    const fn only_while(mut self) -> Self {
+        self.loops = false;
+        self.repeat = false;
         self
     }
 
@@ -993,7 +1045,6 @@ pub const CHAPTERS: &[Chapter] = &[
                 .with_else(),
         ],
     },
-    // Keep going round until there's a wall that way. The clouds decide how
     // Not: "if there's *no* tree". The level only lets the "if" look for one
     // thing, so it's the way to act where that thing isn't.
     Chapter {
@@ -1011,34 +1062,62 @@ pub const CHAPTERS: &[Chapter] = &[
                 .with_not(),
         ],
     },
-    // far that is, so no number of times would do.
+    // Keep going while there's grass ahead (or, with "not", while there's no
+    // tree). The clouds decide how far that is, so no number of times would
+    // do.
     Chapter {
-        name: "Repeat until",
+        name: "While",
         levels: &[
             level("d74", &["R...@", "@@@*@"])
-                .with_until(3)
-                .demo("<R R ] D"),
-            // Go until a tree is in the way, chop it, and carry on.
-            level("until-axe", &["R..?...?..*"])
+                .with_while(3, GRASS)
+                .demo("<gR R ] D"),
+            // Along while there's grass, chop whatever stops it, and on.
+            level("74", &["R...?...*"]).with_axe().with_while(5, GRASS),
+            // "While there's no tree".
+            level("d-while-not", &["R...#.*"])
                 .with_axe()
-                .with_until(5),
-            level("74", &["R.?...*", "..@@@@.", "..?...."]).with_until(6),
-            level("75", &["R..", "...", "?@?", ".@.", ".@.", ".@.", "*.."]).with_until(6),
-            // Not just a wall: "repeat until" can look for grass too. Pick
-            // what it looks for, then which way.
-            level("d-until-look", &["R.....", "@@@.@@", "@@@*@@"])
-                .with_until(3)
-                .until_looking_for(GRASS)
-                .demo("<gD R ] D2"),
-            // Along the top until there's grass below (a cloud that came out
-            // as grass), down through it, and along to the star.
-            level("until-grass", &["R......", "#?????@", "......*"])
-                .with_until(5)
-                .until_looking_for(GRASS),
-            // Down until there's no wall to the right: the way through.
-            level("until-gap", &["R?.", ".?.", ".?.", ".?.", "@@*"])
-                .with_until(5)
+                .with_while(4, TREE)
+                .with_not()
+                .demo("<!tR R ] cR R3"),
+            level("75", &["R", ".", ".", "?", ".", ".", "*"])
+                .with_axe()
+                .with_while(5, TREE)
                 .with_not(),
+        ],
+    },
+    // Break: leave a loop straight away. "While true" goes round for ever
+    // until a break; a counted loop can break early too. Without counts the
+    // long way round doesn't fit, so look and break.
+    Chapter {
+        name: "Break",
+        levels: &[
+            level("d-while-true", &["R....", "@@@.@", "@@@*@"])
+                .with_ifs(6, GRASS)
+                .with_while(6, &[])
+                .with_break()
+                .only_while()
+                .demo("<y R {gD B } ] D D"),
+            // Along until there's grass below, down, and back to the star.
+            level("break-1", &["R......", "@?????.", "*......"])
+                .with_ifs(8, GRASS)
+                .with_while(8, &[])
+                .with_break()
+                .only_while(),
+            // A break leaves a counted loop too.
+            level("d-break", &["R.....", "@@@.@@", "@@@*@@"])
+                .with_ifs(4, GRASS)
+                .with_break()
+                .demo("[ R {gD B } ]5 D2"),
+            // Down until there's grass to the right, across, and down to the
+            // star.
+            level(
+                "break-2",
+                &["R@.", ".?.", ".?.", ".?.", ".?.", ".?.", ".?.", "..*"],
+            )
+            .with_ifs(8, GRASS)
+            .with_while(8, &[])
+            .with_break()
+            .only_while(),
         ],
     },
     // A strip of blocks with a shape for a name, which the main program can
@@ -1243,9 +1322,11 @@ pub struct Level {
     pub loops: bool,
     /// What the "if" block can look for (none: no "if" block).
     pub ifs: Vec<Sense>,
-    pub until: bool,
-    /// What else "repeat until" can look for, besides a wall.
-    pub until_looks: Vec<Sense>,
+    pub whiles: bool,
+    /// What "while" can look for.
+    pub while_looks: Vec<Sense>,
+    /// The break block, and "while true".
+    pub breaks: bool,
     pub otherwise: bool,
     pub not: bool,
     pub functions: usize,
@@ -1275,8 +1356,9 @@ impl Level {
         level.repeat = def.repeat;
         level.loops = def.loops;
         level.ifs = def.ifs.to_vec();
-        level.until = def.until;
-        level.until_looks = def.until_looks.to_vec();
+        level.whiles = def.whiles;
+        level.while_looks = def.while_looks.to_vec();
+        level.breaks = def.breaks;
         level.otherwise = def.otherwise;
         level.not = def.not;
         level.functions = def.functions;
@@ -1338,8 +1420,9 @@ impl Level {
             repeat: false,
             loops: false,
             ifs: Vec::new(),
-            until: false,
-            until_looks: Vec::new(),
+            whiles: false,
+            while_looks: Vec::new(),
+            breaks: false,
             otherwise: false,
             not: false,
             functions: 0,
@@ -1385,28 +1468,17 @@ impl Level {
     }
 
     /// One way the mysteries can turn out (`true` = tree), with `coin`
-    /// tossed for each. With two or more there's always at least one tree and
-    /// one patch of grass, so a program that guesses instead of checking
-    /// can't get lucky every time: if they all come out the same, toss again.
+    /// tossed for each: any way at all, all trees or all grass included.
     pub fn random_outcome(&self, mut coin: impl FnMut() -> bool) -> Vec<bool> {
-        let n = self.mysteries.len();
-        loop {
-            let outcome: Vec<bool> = (0..n).map(|_| coin()).collect();
-            if n < 2 || (outcome.contains(&true) && outcome.contains(&false)) {
-                return outcome;
-            }
-        }
+        (0..self.mysteries.len()).map(|_| coin()).collect()
     }
 
-    /// Every way the mysteries can turn out, by the same rule as
-    /// `random_outcome`. That doubles with each cloud, so it's only for
-    /// checking the game's own levels (which have a few).
+    /// Every way the mysteries can turn out. That doubles with each cloud,
+    /// so it's only for checking the game's own levels (which have a few).
     #[cfg(test)]
     pub fn outcomes(&self) -> Vec<Vec<bool>> {
         let n = self.mysteries.len();
-        let all = (1u32 << n) - 1;
-        (0..=all)
-            .filter(|&bits| n < 2 || (bits != 0 && bits != all))
+        (0..1u32 << n)
             .map(|bits| (0..n).map(|i| bits & (1 << i) != 0).collect())
             .collect()
     }
@@ -1477,6 +1549,7 @@ impl World {
             Sense::Door => matches!(self.tile(next), Some(Tile::Door | Tile::Open)),
             Sense::Grass => matches!(self.tile(next), Some(Tile::Grass | Tile::Stump)),
             Sense::Edge => self.tile(next).is_none(),
+            Sense::True => true,
             // Rain passes, so it isn't a wall.
             Sense::Wall => match self.tile(next) {
                 Some(Tile::Door) => self.held == 0,
@@ -1526,7 +1599,7 @@ impl World {
 
     /// Every action takes a tick, and the rain clouds count down. (Without
     /// any, time doesn't matter, so it doesn't pass: the same place is the
-    /// same place, for spotting a "repeat until" that would never end.)
+    /// same place, for spotting a "while" that would never end.)
     fn tick(&mut self) {
         if self.tiles.iter().any(|t| matches!(t, Tile::Rain(_))) {
             self.clock = (self.clock + 1) % RAIN_CYCLE;
@@ -1646,16 +1719,14 @@ mod tests {
         ("rain-8", "R [ Z3 R2 ]4"),
     ];
 
-    /// Known solutions for the "repeat until" levels. `<R` starts "repeat
-    /// until there's a wall to the right".
-    const UNTIL_SOLUTIONS: &[(&str, &str)] = &[
-        ("until-axe", "<R R ] cR <R R ]"),
-        ("74", "<R R ] D2 <R R ] U2"),
-        ("75", "<D D ] R2 <D D ] L2"),
-        // `<gD` is "until there's grass below", and `<!wR` "until there's no
-        // wall to the right".
-        ("until-grass", "<gD R ] D2 <R R ]"),
-        ("until-gap", "<!wR D ] R2 <D D ]"),
+    /// Known solutions for the "while" levels. `<gR` starts "while there's
+    /// grass to the right", `<!tD` "while there's no tree below", and `<y`
+    /// "while true"; `B` is a break.
+    const WHILE_SOLUTIONS: &[(&str, &str)] = &[
+        ("74", "<gR R ] cR <gR R ]"),
+        ("75", "<!tD D ] cD <!tD D ]"),
+        ("break-1", "<y R {gD B } ] D D <y L ]"),
+        ("break-2", "<y D {gR B } ] R R <y D ]"),
     ];
 
     /// Known solutions for the function levels: the main strip, then each
@@ -1828,7 +1899,7 @@ mod tests {
     #[test]
     fn loop_levels_have_a_solution_that_fits() {
         check_solutions(
-            |l| l.loops && l.functions == 0 && l.ifs.is_empty() && !l.until,
+            |l| l.loops && l.functions == 0 && l.ifs.is_empty() && !l.whiles,
             LOOP_SOLUTIONS,
         );
     }
@@ -2106,17 +2177,25 @@ mod tests {
     }
 
     #[test]
-    fn until_levels_have_a_solution_that_fits() {
-        check_solutions(|l| l.until, UNTIL_SOLUTIONS);
+    fn while_levels_have_a_solution_that_fits() {
+        check_solutions(|l| l.whiles, WHILE_SOLUTIONS);
     }
 
     #[test]
-    fn until_levels_need_until() {
-        for level in numbered().iter() {
-            if level.until
+    fn while_levels_need_while() {
+        for level in numbered().iter().filter(|l| l.whiles) {
+            if level.loops
                 && let Some(program) = fits_with_loops(level, level.slots)
             {
-                panic!("level {} can be done without until: {program:?}", level.id);
+                panic!("level {} can be done without while: {program:?}", level.id);
+            }
+            // Without counts, going the long way round doesn't fit.
+            if let Some(blocks) = fewest_blocks(level, Allow::level(level)) {
+                assert!(
+                    blocks > level.slots,
+                    "level {} fits in plain blocks",
+                    level.id
+                );
             }
         }
     }
@@ -2201,7 +2280,7 @@ mod tests {
     /// chopping if the level has the axe) and "repeat until" loops looking
     /// for any of `senses`, with "not" or without as `nots` allows? A search
     /// that gives up on a program as soon as it loses.
-    fn fits_with_until(level: &Level, senses: &[Sense], nots: &[bool]) -> bool {
+    fn fits_with_while(level: &Level, senses: &[Sense], nots: &[bool]) -> bool {
         let mut pieces = Vec::new();
         for dir in Dir::ALL {
             for times in 1..=3 {
@@ -2218,7 +2297,7 @@ mod tests {
             }
             for &sense in senses {
                 for &not in nots {
-                    pieces.push(Item::Until { sense, dir, not });
+                    pieces.push(Item::While { sense, dir, not });
                 }
             }
         }
@@ -2231,7 +2310,7 @@ mod tests {
             }
             let open = items
                 .iter()
-                .rposition(|i| matches!(i, Item::Until { .. }))
+                .rposition(|i| matches!(i, Item::While { .. }))
                 .filter(|&k| !items[k..].contains(&Item::LoopEnd));
             if open.is_some_and(|k| tiles(&items[k..]) >= 2) {
                 items.push(Item::LoopEnd);
@@ -2244,7 +2323,7 @@ mod tests {
                 return false;
             }
             for &piece in pieces {
-                if open.is_some() && matches!(piece, Item::Until { .. }) {
+                if open.is_some() && matches!(piece, Item::While { .. }) {
                     continue;
                 }
                 items.push(piece);
@@ -2259,37 +2338,23 @@ mod tests {
     }
 
     #[test]
-    fn until_levels_need_what_they_look_for() {
-        for level in numbered().iter().filter(|l| l.until) {
-            let all: Vec<Sense> = [Sense::Wall]
-                .into_iter()
-                .chain(level.until_looks.clone())
-                .collect();
+    fn while_levels_need_what_they_look_for() {
+        // Break levels need an "if" too, which this search doesn't try.
+        for level in numbered().iter().filter(|l| l.whiles && !l.breaks) {
             let nots: &[bool] = if level.not { &[false, true] } else { &[false] };
             assert!(
-                fits_with_until(level, &all, nots),
+                fits_with_while(level, &level.while_looks, nots),
                 "level {} can't be done",
                 level.id
             );
-            if !level.until_looks.is_empty() {
-                assert!(
-                    !fits_with_until(level, &[Sense::Wall], nots),
-                    "level {} can be done looking for a wall",
-                    level.id
-                );
-            }
-            if level.not {
-                assert!(
-                    !fits_with_until(level, &all, &[false]),
-                    "level {} can be done without not",
-                    level.id
-                );
-            }
+            // "Not" isn't checked: "while there's a tree below { chop it }"
+            // works like an "if" wherever a cloud is, so a level can always
+            // be done that way too.
         }
     }
 
     #[test]
-    fn until_goes_on_until_a_wall() {
+    fn while_goes_on_while_it_sees_it() {
         let world = Level::parse(&level("test", &["R...@", ".#..*"])).world();
         let steps = |text: &str| -> Vec<String> {
             expand(&[parse_program(text)], &world)
@@ -2301,25 +2366,54 @@ mod tests {
             format!(
                 "{:?}",
                 Step::Test {
-                    sense: Sense::Wall,
+                    sense: Sense::Grass,
                     dir: Dir::Right,
                     yes
                 }
             )
         };
         let right = "Do(Move(Right))".to_string();
-        let no = looks(false);
+        let yes = looks(true);
         assert_eq!(
-            steps("<R R ]"),
-            [&no, &right, &no, &right, &no, &right, &looks(true)].map(String::clone)
+            steps("<gR R ]"),
+            [&yes, &right, &yes, &right, &yes, &right, &looks(false)].map(String::clone)
         );
-        // It looks first, so with a wall already there nothing runs.
+        // With "not": while there's no rock to the right, the same way.
+        assert_eq!(steps("<!rR R ]").len(), 7);
+        // It looks first, so with no grass there nothing runs.
         let below = Level::parse(&level("test", &["R", "@", "*"])).world();
-        assert_eq!(expand(&[parse_program("<D D ] R")], &below).len(), 2);
+        assert_eq!(expand(&[parse_program("<gD D ] R")], &below).len(), 2);
         // Going nowhere would go on for ever, so it stops.
-        let stuck = steps("<R D U ]");
+        let stuck = steps("<gR D U ]");
         assert_eq!(stuck.last().unwrap(), "Forever");
         assert_eq!(stuck.len(), 5, "looks, down, up, looks again, gives up");
+    }
+
+    #[test]
+    fn break_leaves_the_loop_it_is_in() {
+        let world = Level::parse(&level("test", &["R....", "@@@.@", "@@@*@"])).world();
+        let cmds = |text: &str| -> Vec<String> {
+            expand(&[parse_program(text)], &world)
+                .iter()
+                .filter_map(|e| match e.step {
+                    Step::Do(cmd) => Some(format!("{cmd:?}")),
+                    Step::Break => Some("Break".into()),
+                    _ => None,
+                })
+                .collect()
+        };
+        let (r, d) = ("Move(Right)", "Move(Down)");
+        // A counted loop, and "while true", both stop at the gap.
+        assert_eq!(cmds("[ R {gD B } ]4 D2"), [r, r, r, "Break", d, d]);
+        assert_eq!(cmds("<y R {gD B } ] D D"), [r, r, r, "Break", d, d]);
+        // "While true" with no break goes until it's back where it was.
+        let world = Level::parse(&level("test", &["R.", ".*"])).world();
+        let steps = expand(&[parse_program("<y R L ]")], &world);
+        assert_eq!(steps.last().unwrap().step, Step::Forever);
+        // A break outside a loop in a function ends just the function.
+        let world = Level::parse(&level("test", &["R..*"])).world();
+        let strips = parse_strips("f1 R | R B R");
+        assert_eq!(expand(&strips, &world).len(), 3, "R, break, R");
     }
 
     #[test]
@@ -2366,9 +2460,8 @@ mod tests {
                     if_chop: false,
                     ..Allow::level(level)
                 };
-                assert_eq!(
-                    fewest_blocks(level, allow),
-                    None,
+                assert!(
+                    !fits_in_blocks(level, allow),
                     "level {} can be done without an if",
                     level.id
                 );
@@ -2426,9 +2519,9 @@ mod tests {
         assert_eq!(sim.trace.len(), 11);
         assert_eq!(sim.worlds.len(), 12);
         assert!(sim.worlds[8..].iter().all(|w| w.pos == (14, 7)));
-        // A "repeat until" after the end goes round once (look, D, look),
+        // A "while" after the end goes round once (look, D, look),
         // since nothing moves, then the program goes on.
-        let strips = [parse_program("R8 <U D ] L")];
+        let strips = [parse_program("R8 <gU D ] L")];
         let sim = simulate(&strips, &open_field());
         assert_eq!((sim.ran, sim.trace.len()), (8, 12));
     }
@@ -2627,12 +2720,12 @@ mod tests {
             // Clouds need a way to deal with them: looking for a tree, or
             // going on until the robot gets to them.
             assert!(
-                level.mysteries.is_empty() || level.ifs.contains(&Sense::Tree) || level.until,
+                level.mysteries.is_empty() || level.ifs.contains(&Sense::Tree) || level.whiles,
                 "level {n}: mysteries need a way to look at them"
             );
             // "Repeat until" levels can only be done with one; their known
-            // solutions are checked in `until_levels_have_a_solution_that_fits`.
-            if level.until {
+            // solutions are checked in `while_levels_have_a_solution_that_fits`.
+            if level.whiles {
                 continue;
             }
             let blocks = fewest_blocks(level, Allow::level(level))
@@ -2683,6 +2776,18 @@ mod tests {
         }
     }
 
+    /// Can the level be won with a program of plain blocks? Where loops
+    /// could squash a long one down, any at all; with no loops (and no
+    /// counts), only one that fits in its slots.
+    fn fits_in_blocks(level: &Level, allow: Allow) -> bool {
+        let blocks = fewest_blocks(level, allow);
+        if level.loops {
+            blocks.is_some()
+        } else {
+            blocks.is_some_and(|b| b <= level.slots)
+        }
+    }
+
     #[test]
     fn cloud_levels_need_to_look() {
         for level in numbered().iter() {
@@ -2691,9 +2796,8 @@ mod tests {
                     if_chop: false,
                     ..Allow::level(level)
                 };
-                assert_eq!(
-                    fewest_blocks(level, allow),
-                    None,
+                assert!(
+                    !fits_in_blocks(level, allow),
                     "level {} can be done without looking",
                     level.id
                 );
@@ -2702,20 +2806,12 @@ mod tests {
     }
 
     #[test]
-    fn mysteries_always_include_a_tree_and_grass() {
+    fn mysteries_can_come_out_any_way() {
         let pair = Level::parse(&level("test", &["R??"]).with_tree_if());
-        assert_eq!(pair.outcomes().len(), 2);
+        assert_eq!(pair.outcomes().len(), 4, "both trees, both grass too");
         let single = Level::parse(&level("test", &["R?"]).with_tree_if());
         assert_eq!(single.outcomes(), vec![vec![false], vec![true]]);
-        // Two trees can't happen, so it tosses again.
-        let mut tosses = [true, true, true, false].into_iter();
-        let mut coin = || tosses.next().unwrap_or(true);
-        assert_eq!(pair.random_outcome(&mut coin), [true, false]);
-        assert_eq!(
-            single.random_outcome(|| true),
-            [true],
-            "one cloud can be either"
-        );
+        assert_eq!(pair.random_outcome(|| true), [true, true]);
     }
 
     #[test]

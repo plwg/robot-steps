@@ -33,7 +33,7 @@ const SAD_TIME: f32 = 1.4;
 const CHECK_TIME: f32 = 0.7;
 const SLEEP_TIME: f32 = 0.7;
 /// A "repeat until" looks every time round, so it looks quickly.
-const UNTIL_LOOK_TIME: f32 = 0.4;
+const WHILE_LOOK_TIME: f32 = 0.4;
 const REVEAL_TIME: f32 = 0.8;
 /// Sliding on ice takes this long per tile (plus a little to slow down).
 const SLIDE_TIME: f32 = 0.16;
@@ -74,6 +74,7 @@ const STOP_RED: Color = Color::new(0.9, 0.25, 0.25, 1.0);
 const UNDO_YELLOW: Color = Color::new(0.95, 0.7, 0.1, 1.0);
 const AXE_BROWN: Color = Color::new(0.62, 0.4, 0.22, 1.0);
 const REPEAT_TEAL: Color = Color::new(0.1, 0.65, 0.65, 1.0);
+const BREAK_PLUM: Color = Color::new(0.62, 0.3, 0.55, 1.0);
 const CHECK_SLATE: Color = Color::new(0.33, 0.36, 0.55, 1.0);
 /// Each function's shape colour: ● and ▲.
 const FN_COLOURS: [Color; 2] = [
@@ -894,9 +895,11 @@ enum Button {
     Not,
     /// "Otherwise": the blocks after it run when the "if" says no.
     Else,
-    /// Start a "repeat until there's a wall" (then pick a direction), or end
+    /// Start a "while" (then pick what it looks for, and which way), or end
     /// it.
-    Until,
+    While,
+    /// Leave the loop it's in.
+    Break,
     /// Make the last count in a function "the number it's called with".
     Number,
     /// Add a call to function 1 or 2.
@@ -1030,7 +1033,7 @@ struct Game {
     /// The "if" (or "repeat until") being started is "if there's *no*...".
     if_not: bool,
     /// What the "repeat until" being started looks for, once picked.
-    until_look: Option<Sense>,
+    while_look: Option<Sense>,
     /// This player's best for each level they've finished: kept from the
     /// first time.
     best: progress::Best,
@@ -1067,7 +1070,8 @@ enum Kind {
     Function,
     Ice,
     Key,
-    Until,
+    While,
+    Break,
     Else,
     Not,
     Number,
@@ -1084,8 +1088,10 @@ impl Kind {
             Kind::Not
         } else if level.otherwise {
             Kind::Else
-        } else if level.until {
-            Kind::Until
+        } else if level.breaks {
+            Kind::Break
+        } else if level.whiles {
+            Kind::While
         } else if !level.keys.is_empty() {
             Kind::Key
         } else if level.has(Tile::Ice) {
@@ -1118,7 +1124,8 @@ impl Kind {
             Kind::Function => FN_COLOURS[0],
             Kind::Ice => ICE_BLUE,
             Kind::Key => KEY_GOLD,
-            Kind::Until => darker(REPEAT_TEAL, 0.8),
+            Kind::While => darker(REPEAT_TEAL, 0.8),
+            Kind::Break => BREAK_PLUM,
             Kind::Else => darker(IF_LIME, 0.8),
             Kind::Not => mix(IF_LIME, STOP_RED, 0.45),
             Kind::Number => FN_COLOURS[1],
@@ -1173,7 +1180,7 @@ impl Game {
             preview: Vec::new(),
             sliding: false,
             if_not: false,
-            until_look: None,
+            while_look: None,
             best: progress::Best::new(),
             result: None,
             show_best: false,
@@ -1369,8 +1376,11 @@ impl Game {
                     .rev()
                     .find_map(|e| match e.step {
                         Step::Do(cmd) => cmd.dir(),
+                        Step::Test {
+                            sense: Sense::True, ..
+                        } => None,
                         Step::Test { dir, .. } => Some(dir),
-                        Step::Forever => None,
+                        Step::Forever | Step::Break => None,
                     })
                     .unwrap_or(Dir::Right);
             }
@@ -1565,6 +1575,7 @@ impl Game {
                 Step::Do(cmd) => Self::block_colour(cmd),
                 Step::Test { .. } => IF_LIME,
                 Step::Forever => STOP_RED,
+                Step::Break => BREAK_PLUM,
             };
             let colour = if k < ran {
                 colour
@@ -1665,10 +1676,11 @@ impl Game {
         let looking = self.trace.get(self.pc).map(|e| (e.step, e.at));
         match looking {
             Some((Step::Test { .. }, (strip, i)))
-                if matches!(self.strips[strip].get(i), Some(Item::Until { .. })) =>
+                if matches!(self.strips[strip].get(i), Some(Item::While { .. })) =>
             {
-                UNTIL_LOOK_TIME
+                WHILE_LOOK_TIME
             }
+            Some((Step::Break, _)) => WHILE_LOOK_TIME,
             _ => CHECK_TIME,
         }
     }
@@ -1811,19 +1823,59 @@ impl Game {
     /// for?
     fn picking(&self) -> bool {
         self.armed == Some(Button::If)
-            || (self.armed == Some(Button::Until) && self.until_look.is_none())
+            || (self.armed == Some(Button::While) && self.while_look.is_none())
     }
 
-    /// What can be picked: for a "repeat until", a wall and anything else the
-    /// level lets it look for; for an "if", what the level lets that look
-    /// for.
+    /// What can be picked: for a "while", what the level lets it look for
+    /// (and "true", with a break to end it); for an "if", what the level lets
+    /// that look for.
     fn choices(&self) -> Vec<Sense> {
-        if self.armed == Some(Button::Until) {
-            let mut senses = vec![Sense::Wall];
-            senses.extend(&self.level().until_looks);
-            senses
+        if self.armed == Some(Button::While) {
+            Self::while_choices(self.level())
         } else {
             self.level().ifs.clone()
+        }
+    }
+
+    fn while_choices(level: &Level) -> Vec<Sense> {
+        let mut senses = level.while_looks.clone();
+        if level.breaks {
+            senses.push(Sense::True);
+        }
+        senses
+    }
+
+    /// Is there a loop open where the next block goes, for a break to leave?
+    fn in_loop(&self) -> bool {
+        let items = self.prog();
+        let at = items
+            .iter()
+            .position(|&i| i == Item::Gap)
+            .unwrap_or(items.len());
+        let mut depth = 0i32;
+        for item in &items[..at] {
+            match item {
+                Item::LoopStart { .. } | Item::While { .. } => depth += 1,
+                Item::LoopEnd => depth -= 1,
+                _ => {}
+            }
+        }
+        depth > 0
+    }
+
+    /// Start "while" looking for `sense`: "true" looks no way, so it starts
+    /// straight away, but anything else waits for a direction.
+    fn pick_while(&mut self, sense: Sense) {
+        if sense == Sense::True {
+            self.armed = None;
+            self.if_not = false;
+            self.insert(Item::While {
+                sense,
+                dir: Dir::Right,
+                not: false,
+            });
+        } else {
+            self.while_look = Some(sense);
         }
     }
 
@@ -1845,9 +1897,10 @@ impl Game {
             Button::If => !self.level().ifs.is_empty(),
             Button::Sleep => self.level().sleep,
             Button::Sense(sense) => self.picking() && self.choices().contains(&sense),
+            Button::Break => self.level().breaks,
             Button::Not => self.picking() && self.level().not,
             Button::Else => self.level().otherwise,
-            Button::Until => self.level().until,
+            Button::While => self.level().whiles,
             Button::Number => self.level().numbers,
             Button::Call(f) => f <= self.level().functions,
             _ => true,
@@ -1877,11 +1930,13 @@ impl Game {
                         items.len() > start + 1 && !items[start..].contains(&Item::Else)
                     })
             }
-            Button::Until => {
+            Button::While => {
                 let open_if = open_if(self.prog()).is_some();
                 editing && (open_loop(self.prog()).is_some() || (self.can_place() && !open_if))
             }
             Button::Number => editing && self.can_number(),
+            // A break leaves a loop, so it goes in one.
+            Button::Break => editing && self.can_place() && self.in_loop(),
             // Calls only go in the main program.
             Button::Call(_) => editing && self.editing == 0 && self.can_place(),
             Button::Repeat => editing && self.count_slot().is_some(),
@@ -1913,12 +1968,12 @@ impl Game {
                         self.insert(Item::IfStart { sense, dir, not });
                         return;
                     }
-                    Some(Button::Until) => {
-                        let Some(sense) = self.until_look.take() else {
+                    Some(Button::While) => {
+                        let Some(sense) = self.while_look.take() else {
                             return;
                         };
                         let not = std::mem::take(&mut self.if_not);
-                        self.insert(Item::Until { sense, dir, not });
+                        self.insert(Item::While { sense, dir, not });
                         return;
                     }
                     _ => Cmd::Move(dir),
@@ -1935,9 +1990,7 @@ impl Game {
                     times: 1,
                 }));
             }
-            Button::Sense(sense) if self.armed == Some(Button::Until) => {
-                self.until_look = Some(sense);
-            }
+            Button::Sense(sense) if self.armed == Some(Button::While) => self.pick_while(sense),
             Button::Sense(_) => self.armed = Some(button),
             Button::Not => self.if_not = !self.if_not,
             Button::Repeat => self.set_times(self.next_times()),
@@ -1971,7 +2024,7 @@ impl Game {
                 }
             },
             // Like a loop, but tap it then pick which way to look.
-            Button::Until => match open_loop(self.prog()) {
+            Button::While => match open_loop(self.prog()) {
                 Some(start) if self.last_added == Some(start) => self.remove_last_added(),
                 Some(_) => {
                     if open_if(self.prog()).is_some() {
@@ -1981,17 +2034,25 @@ impl Game {
                 }
                 // Tapped again while choosing: never mind.
                 None if self.armed == Some(button) => self.armed = None,
-                // Pick what to look for, unless it can only be a wall.
+                // Pick what to look for, unless there's only one thing.
                 None => {
                     self.armed = Some(button);
                     self.if_not = false;
-                    let only_walls = self.level().until_looks.is_empty() && !self.level().not;
-                    self.until_look = only_walls.then_some(Sense::Wall);
+                    self.while_look = None;
+                    if let [only] = Self::while_choices(self.level())[..]
+                        && (!self.level().not || only == Sense::True)
+                    {
+                        self.pick_while(only);
+                    }
                 }
             },
             Button::Else => {
                 self.armed = None;
                 self.insert(Item::Else);
+            }
+            Button::Break => {
+                self.armed = None;
+                self.insert(Item::Break);
             }
             Button::Number => self.set_times(NUMBER),
             Button::Call(f) => {
@@ -2070,6 +2131,16 @@ impl Game {
                 self.failed_step = Some(exec.at);
                 self.sfx(Sfx::Sad);
                 self.set_mode(Mode::Sad);
+                return;
+            }
+            // "While true" and a break just take a moment.
+            Step::Test {
+                sense: Sense::True, ..
+            }
+            | Step::Break => {
+                self.event = None;
+                self.sfx(Sfx::Look);
+                self.set_mode(Mode::Checking);
                 return;
             }
             // An "if" looks before deciding.
@@ -2369,7 +2440,8 @@ impl Game {
             (KeyCode::X, Button::Not),
             (KeyCode::Z, Button::Sleep),
             (KeyCode::E, Button::Else),
-            (KeyCode::W, Button::Until),
+            (KeyCode::W, Button::While),
+            (KeyCode::B, Button::Break),
             (KeyCode::N, Button::Number),
             (KeyCode::F, Button::Call(1)),
             (KeyCode::G, Button::Call(2)),
@@ -2431,9 +2503,10 @@ impl Game {
             Button::Sleep,
             Button::Repeat,
             Button::Loop,
-            Button::Until,
+            Button::While,
             Button::If,
             Button::Else,
+            Button::Break,
             Button::Call(1),
             Button::Call(2),
             Button::Number,
@@ -2492,13 +2565,14 @@ impl Game {
                         Sense::Grass => "grass",
                         Sense::Edge => "the edge",
                         Sense::Wall => "a wall",
+                        Sense::True => return "Always (true)".to_string(),
                     }
                 );
             }
             Button::Not => "Not: there's no...",
             Button::Else => "Otherwise",
-            Button::Until if self.level().until_looks.is_empty() => "Repeat until a wall",
-            Button::Until => "Repeat until...",
+            Button::While => "While...",
+            Button::Break => "Break: leave the loop",
             Button::Number => "The function's number",
             Button::Call(1) => "Run the circle function",
             Button::Call(_) => "Run the triangle function",
@@ -3607,10 +3681,11 @@ impl Game {
     fn item_colour(item: Item) -> Color {
         match item {
             Item::Block(b) => Self::block_colour(b.cmd),
-            Item::LoopStart { .. } | Item::Until { .. } | Item::LoopEnd => REPEAT_TEAL,
+            Item::LoopStart { .. } | Item::While { .. } | Item::LoopEnd => REPEAT_TEAL,
             Item::IfStart { .. } | Item::Else | Item::IfEnd => IF_LIME,
             Item::Call(..) => CALL_INK,
             Item::Gap => SLOT_EMPTY,
+            Item::Break => BREAK_PLUM,
         }
     }
 
@@ -3635,8 +3710,9 @@ impl Game {
             },
             Item::LoopStart { .. } | Item::LoopEnd | Item::Else | Item::IfEnd | Item::Gap => {}
             Item::IfStart { sense, dir, not } => draw_if_icon(r.center(), r.w, sense, dir, not),
-            Item::Until { sense, dir, not } => draw_until_icon(r.center(), r.w, dir, sense, not),
+            Item::While { sense, dir, not } => draw_while_icon(r.center(), r.w, dir, sense, not),
             Item::Call(f, _) => draw_shape(r.center(), r.w * 0.28, f),
+            Item::Break => draw_break_icon(r.center(), r.w),
         }
         if let Some(n) = badge {
             let c = vec2(r.x + r.w - 4.0, r.y + 4.0);
@@ -3732,7 +3808,7 @@ impl Game {
         for loops in [true, false] {
             for (i, item) in items.iter().enumerate() {
                 let (is_start, band) = match item {
-                    Item::LoopStart { .. } | Item::Until { .. } => (loops, LOOP_BAND),
+                    Item::LoopStart { .. } | Item::While { .. } => (loops, LOOP_BAND),
                     Item::IfStart { .. } => (!loops, IF_BAND),
                     _ => (false, LOOP_BAND),
                 };
@@ -3801,12 +3877,13 @@ impl Game {
                 Item::LoopStart { times } => looping.or(Some(times)),
                 Item::Call(_, n) if self.level().numbers => Some(n),
                 Item::LoopEnd
-                | Item::Until { .. }
+                | Item::While { .. }
                 | Item::IfStart { .. }
                 | Item::Else
                 | Item::IfEnd
                 | Item::Call(..)
-                | Item::Gap => None,
+                | Item::Gap
+                | Item::Break => None,
             };
             if item == Item::Gap {
                 // An opened-up slot pulses, waiting for the next block.
@@ -3852,7 +3929,8 @@ impl Game {
                 Button::Sleep => (SLEEP_SLATE, 18.0),
                 Button::Repeat | Button::Loop => (REPEAT_TEAL, 18.0),
                 Button::If | Button::Sense(_) | Button::Not | Button::Else => (IF_LIME, 18.0),
-                Button::Until => (REPEAT_TEAL, 18.0),
+                Button::While => (REPEAT_TEAL, 18.0),
+                Button::Break => (BREAK_PLUM, 18.0),
                 Button::Number => (CALL_INK, 18.0),
                 Button::Call(_) => (CALL_INK, 18.0),
                 Button::Play if self.running() => (STOP_RED, half),
@@ -3868,7 +3946,7 @@ impl Game {
             // loop glows until it's closed.
             // An open loop or "if" makes its button glow until it's closed.
             let open_loop = match button {
-                Button::Loop | Button::Until => open_loop(self.prog()).is_some(),
+                Button::Loop | Button::While => open_loop(self.prog()).is_some(),
                 Button::If => open_if(self.prog()).is_some() || self.armed_if(),
                 _ => false,
             };
@@ -3898,8 +3976,8 @@ impl Game {
                 Button::Arrow(dir) => match self.armed {
                     Some(Button::Axe) => draw_chop_icon(c, size, dir),
                     Some(Button::Sense(sense)) => draw_if_icon(c, size, sense, dir, self.if_not),
-                    Some(Button::Until) if let Some(sense) = self.until_look => {
-                        draw_until_icon(c, size, dir, sense, self.if_not)
+                    Some(Button::While) if let Some(sense) = self.while_look => {
+                        draw_while_icon(c, size, dir, sense, self.if_not)
                     }
                     _ => draw_arrow(c, size * 0.8, dir, WHITE),
                 },
@@ -3928,7 +4006,7 @@ impl Game {
                     let k = half - 5.0;
                     rounded_rect(c.x - k, c.y - k, k * 2.0, k * 2.0, 12.0, GRASS);
                     draw_sense(c, size * 0.95, sense);
-                    if self.if_not {
+                    if self.if_not && sense != Sense::True {
                         draw_no_slash(c, size * 0.32);
                     }
                 }
@@ -3941,17 +4019,21 @@ impl Game {
                     draw_no_sign(c, size * 0.3);
                 }
                 Button::Else => draw_answer(c, false),
+                Button::Break => draw_break_icon(c, size),
                 // While a loop is open, the button shows how to close it.
-                Button::Until if open_loop => {
+                Button::While if open_loop => {
                     let r = Rect::new(c.x - half, c.y - half, size, size);
                     draw_bracket(r, c.x + size * 0.22, false, WHITE);
                 }
                 // Once chosen, what it'll look for.
-                Button::Until => match (self.armed, self.until_look) {
-                    (Some(Button::Until), Some(sense)) => {
-                        draw_until_icon(c, size, Dir::Right, sense, self.if_not)
+                Button::While => match (self.armed, self.while_look) {
+                    (Some(Button::While), Some(sense)) => {
+                        draw_while_icon(c, size, Dir::Right, sense, self.if_not)
                     }
-                    _ => draw_until_icon(c, size, Dir::Right, Sense::Wall, false),
+                    _ => {
+                        let first = Self::while_choices(self.level()).first().copied();
+                        draw_while_icon(c, size, Dir::Right, first.unwrap_or(Sense::Grass), false)
+                    }
                 },
                 Button::Number => draw_number_icon(c, half, self.editing.max(1)),
                 Button::Loop => {
@@ -4203,7 +4285,7 @@ fn draw_band(rects: &[Rect], colour: Color) {
 fn open_loop(items: &[Item]) -> Option<usize> {
     let start = items
         .iter()
-        .rposition(|i| matches!(i, Item::LoopStart { .. } | Item::Until { .. }))?;
+        .rposition(|i| matches!(i, Item::LoopStart { .. } | Item::While { .. }))?;
     let closed = items[start..].contains(&Item::LoopEnd);
     (!closed).then_some(start)
 }
@@ -4220,14 +4302,14 @@ fn open_if(items: &[Item]) -> Option<usize> {
 /// The two ends of the loop or "if" that slot `i` is one end of.
 fn pair_ends(items: &[Item], i: usize) -> Option<(usize, Option<usize>)> {
     let (is_start, close): (fn(&Item) -> bool, Item) = match items[i] {
-        Item::LoopStart { .. } | Item::Until { .. } | Item::LoopEnd => (
-            |it| matches!(it, Item::LoopStart { .. } | Item::Until { .. }),
+        Item::LoopStart { .. } | Item::While { .. } | Item::LoopEnd => (
+            |it| matches!(it, Item::LoopStart { .. } | Item::While { .. }),
             Item::LoopEnd,
         ),
         Item::IfStart { .. } | Item::IfEnd => {
             (|it| matches!(it, Item::IfStart { .. }), Item::IfEnd)
         }
-        Item::Block(_) | Item::Call(..) | Item::Else | Item::Gap => {
+        Item::Block(_) | Item::Call(..) | Item::Else | Item::Gap | Item::Break => {
             return None;
         }
     };
@@ -4265,6 +4347,28 @@ fn draw_sense(c: Vec2, size: f32, sense: Sense) {
                 }
             }
         }
+        // Always: a big tick.
+        Sense::True => {
+            let r = size * 0.36;
+            draw_circle(c.x, c.y, r, YES_GREEN);
+            let k = r / 13.0;
+            draw_line(
+                c.x - 6.0 * k,
+                c.y,
+                c.x - 1.5 * k,
+                c.y + 5.0 * k,
+                3.5 * k,
+                WHITE,
+            );
+            draw_line(
+                c.x - 1.5 * k,
+                c.y + 5.0 * k,
+                c.x + 6.5 * k,
+                c.y - 5.0 * k,
+                3.5 * k,
+                WHITE,
+            );
+        }
         // The edge of the map: grass that stops, and nothing beyond.
         Sense::Edge => {
             let s = size * 0.8;
@@ -4279,7 +4383,13 @@ fn draw_sense(c: Vec2, size: f32, sense: Sense) {
 /// "Repeat until there's a wall (or a star...) that way": what it looks for
 /// (crossed out with `not`: "until there's no..."), an arrow, and the loop
 /// arrow.
-fn draw_until_icon(c: Vec2, size: f32, dir: Dir, sense: Sense, not: bool) {
+fn draw_while_icon(c: Vec2, size: f32, dir: Dir, sense: Sense, not: bool) {
+    // "While true": the tick and the loop arrow, looking no way.
+    if sense == Sense::True {
+        draw_sense(c - vec2(size * 0.12, -size * 0.06), size * 0.62, sense);
+        draw_loop_icon(c + vec2(size * 0.22, -size * 0.2), size * 0.3, WHITE);
+        return;
+    }
     let at = c - vec2(size * 0.16, size * 0.02);
     draw_sense(at, size * 0.55, sense);
     if not {
@@ -4287,6 +4397,19 @@ fn draw_until_icon(c: Vec2, size: f32, dir: Dir, sense: Sense, not: bool) {
     }
     draw_arrow(c + vec2(size * 0.24, size * 0.16), size * 0.4, dir, WHITE);
     draw_loop_icon(c + vec2(size * 0.24, -size * 0.2), size * 0.3, WHITE);
+}
+
+/// A break: the end of a loop, broken, and an arrow out through the gap.
+fn draw_break_icon(c: Vec2, size: f32) {
+    let x = c.x + size * 0.1;
+    let (h, t) = (size * 0.28, size * 0.08);
+    let serif = size * 0.14;
+    for (y0, y1) in [(c.y - h, c.y - size * 0.1), (c.y + size * 0.1, c.y + h)] {
+        draw_line(x, y0, x, y1, t, WHITE);
+    }
+    draw_line(x - serif, c.y - h, x + t / 2.0, c.y - h, t, WHITE);
+    draw_line(x - serif, c.y + h, x + t / 2.0, c.y + h, t, WHITE);
+    draw_arrow(c + vec2(size * 0.04, 0.0), size * 0.62, Dir::Right, WHITE);
 }
 
 /// "The function's number": its shape in a badge, like a count.

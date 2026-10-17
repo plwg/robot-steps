@@ -12,7 +12,7 @@ stars. There's no reading required.
 |---|---|
 | ![Three players, each with their own robot and progress](docs/players.png) | ![Level 48: the main program calls the ● and ▲ functions, and the robot is partway through ▲, chopping a tree](docs/level.png) |
 
-Across 107 levels in 17 chapters, numbered within each chapter (`3-2`), it
+Across 108 levels in 18 chapters, numbered within each chapter (`3-2`), it
 introduces, in the order programming is usually taught:
 
 1. **Moving:** up, down, left and right, in order
@@ -27,7 +27,8 @@ introduces, in the order programming is usually taught:
    behind it. There's no going back the same way, so plan the way round
    (and which island to leave till last)
 6. **Repeat:** run one block several times when there aren't enough slots
-7. **If:** mystery clouds become a tree or grass each run, so the robot has
+7. **If:** mystery clouds become a tree or grass each run (any way at all:
+   all trees, all grass, or a mix), so the robot has
    to look before it chops: "if there's a tree to the right { chop it }". Tap
    "if", pick what to look for (shown as map tiles: a tree, rock, star, ice,
    key, door, grass, or the edge of the map, whichever the level offers),
@@ -41,27 +42,31 @@ introduces, in the order programming is usually taught:
    starts
 11. **Not:** "if there's *no* tree above { fetch the star }". In the
     "if" choices, the red "no" sign crosses out what to look for
-12. **Repeat until:** "keep going until there's a wall that way". The robot
-    looks before each time round. Mystery clouds decide how far it is, so no
-    fixed number of times would do. One that would go round for ever (back
-    where it started, and still no wall) stops and shakes red. Then it can
-    look for other things too, picked like an "if": "keep going until
-    there's grass below", and with "not", "keep going down until there's
-    no wall to the right"
-13. **Functions:** extra strips of blocks named with a shape (● and ▲) that
+12. **While:** "while there's grass to the right { go right }". Pick what to
+    look for, like an "if", then which way; the robot looks before each
+    time round. Mystery clouds decide how far it is, so no fixed number of
+    times would do. With "not": "while there's *no* tree below { go down }".
+    One that would go round for ever (back where it started, and still
+    going) stops and shakes red
+13. **Break:** leave a loop straight away, from inside an "if": "while true
+    { go right; if there's grass below { break } }". "While true" (a tick)
+    goes round for ever until a break, and a break leaves a counted loop
+    early too. These levels have no counts, so going the long way round
+    doesn't fit
+14. **Functions:** extra strips of blocks named with a shape (● and ▲) that
     the main program calls whenever it needs them
-14. **Functions + if:** "if" blocks inside functions
-15. **Function numbers:** call ● with a number (set with repeat), and
+15. **Functions + if:** "if" blocks inside functions
+16. **Function numbers:** call ● with a number (set with repeat), and
     inside it a count can be "●'s number" instead of a fixed one, so one
     function makes stairs of 1, 2 and 3
-16. **Rain:** rain clouds count down 3, 2, 1, rain for 2, then start again.
+17. **Rain:** rain clouds count down 3, 2, 1, rain for 2, then start again.
     A row under each cloud shows its whole cycle (a dot for each dry tick, a
     drop for each tick of rain, with the one it's on now ringed). Every
     action takes a
     tick, so sleep while it rains (the sleep block, Zzz, repeated like any
     other) or hurry across before it starts. Being under a cloud when it
     rains is getting wet, and the end of the run
-17. **All together**
+18. **All together**
 
 Throughout, a **slider** along the top runs the program ahead of time, while
 it's being built: drag it to see where the robot would be just before any
@@ -116,13 +121,13 @@ across the map to paint it. Tapping a rain cloud again moves where it starts
 in its cycle (the ringed dot moves along). Under the map, − and + change its width and height and how many slots
 the program has (and each function, when there are functions). The buttons
 under the tiles choose the blocks it allows: the axe, sleep, repeat, loops,
-"repeat until", "if", "else", "not", the two functions and numbers for them.
-Some bring others along, as in the game's own levels: loops need repeat;
-"repeat until" and functions need loops; "else" and "not" need an "if"; and
-numbers need a function. Mystery clouds always come with "if" and the axe,
-and rain clouds with sleep. The "if" can look for anything painted on the
-map, grass, and the edge, and "repeat until" for those (but a rock) or a
-wall.
+"while", "if", "else", "not", the two functions and numbers for them, and
+break. Some bring others along, as in the game's own levels: loops need
+repeat; "while" and functions need loops; "else" and "not" need an "if";
+numbers need a function; and break needs a loop and an "if" (and with
+"while", it brings "while true"). Mystery clouds always come with "if" and
+the axe, and rain clouds with sleep. The "if" and "while" can look for
+anything painted on the map, grass, and the edge.
 
 Press play to try the map out. The arrow at the top left goes back to
 everyone's maps, where a map can be played, changed with the pencil, or
@@ -193,7 +198,8 @@ version to GitHub Pages (`.github/workflows/pages.yml`).
 | Z | Sleep a tick |
 | , / . | Move the slider back / forward a step |
 | E | Else, inside an "if" |
-| W, then an arrow | Start "repeat until there's a wall that way" (again to close) |
+| W, then a choice and an arrow | Start a "while" (again to close) |
+| B | Break, inside a loop |
 | N | In a function, make the last count the function's number |
 | F / G | Call function ● / ▲ |
 | Tab | Switch between the main program and the functions |
@@ -213,8 +219,11 @@ Each level has a name for the save files that never changes, however the
 levels are moved around: the levels used to be numbered straight through,
 1 to 79, and those numbers are their names (`d13` for the demo before 13),
 so old saves still work. New levels get a name instead. `cargo test` proves that every
-level can be solved within its slots, and that each tool is actually needed
-where it's introduced.
+level can be solved within its slots, however the mystery clouds turn out,
+and that each tool is actually needed where it's introduced. Two exceptions:
+"not" with "while" (a "while there's a tree { chop it }" works like an
+"if", so there's always a way without it), and break, whose levels are only
+checked against plain blocks, not every mix of loops and "if"s.
 
 Bumping into a rock, a tree, a locked door or the edge of the map stops the
 program; it isn't a harmless "stay put" (unlike sliding on ice into something,
