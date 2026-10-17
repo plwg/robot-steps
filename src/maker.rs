@@ -138,9 +138,15 @@ impl Game {
     }
 
     /// How many pages of maps there are, counting the card for a new one.
+    /// How many pages of maps there are: always one more, of empty slots,
+    /// after the last map (while there's room).
     fn pages(&self) -> usize {
-        let cards = (self.maps.len() + 1).min(MAX_MAPS);
-        cards.div_ceil(PER_PAGE).max(1)
+        (self.maps.len().div_ceil(PER_PAGE) + 1).min(MAX_MAPS / PER_PAGE)
+    }
+
+    /// The empty slots on the page shown, each making a new map.
+    fn empty_slots(&self) -> impl Iterator<Item = usize> + use<'_> {
+        (self.maps.len()..MAX_MAPS).filter(|&i| self.on_page(i))
     }
 
     fn on_page(&self, i: usize) -> bool {
@@ -237,9 +243,9 @@ impl Game {
                 return;
             }
         }
-        // The last card makes a new map.
-        let n = self.maps.len();
-        if n < MAX_MAPS && self.on_page(n) && card(n).contains(m) {
+        // An empty slot makes a new map (after the others).
+        if self.empty_slots().any(|i| card(i).contains(m)) {
+            let n = self.maps.len();
             self.maps.push(CustomMap::new());
             self.save_maps();
             self.open_maker(n);
@@ -315,15 +321,21 @@ impl Game {
             rounded_rect(d.x - size, d.y - size, size * 2.0, size * 2.0, 12.0, colour);
             draw_trash_icon(d, size);
         }
+        // Empty slots, each with a +: the next one bright, the rest pale.
         let n = self.maps.len();
-        if n < MAX_MAPS && self.on_page(n) {
-            let r = card(n);
+        for i in self.empty_slots() {
+            let r = card(i);
             let hover = r.contains(self.mouse);
             let colour = if hover { WHITE } else { mix(SKY, WHITE, 0.6) };
             rounded_rect(r.x, r.y, r.w, r.h, 26.0, colour);
             let c = r.center();
             let k = if hover { 1.1 } else { 1.0 };
-            draw_circle(c.x, c.y, 52.0 * k, PLAY_GREEN);
+            let plus = if i == n || hover {
+                PLAY_GREEN
+            } else {
+                mix(PLAY_GREEN, WHITE, 0.55)
+            };
+            draw_circle(c.x, c.y, 52.0 * k, plus);
             draw_rectangle(c.x - 30.0 * k, c.y - 8.0 * k, 60.0 * k, 16.0 * k, WHITE);
             draw_rectangle(c.x - 8.0 * k, c.y - 30.0 * k, 16.0 * k, 60.0 * k, WHITE);
         }

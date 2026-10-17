@@ -146,7 +146,9 @@ anything painted on the map, grass, and the edge.
 Press play to try the map out. The arrow at the top left goes back to
 everyone's maps, where a map can be played, changed with the pencil, or
 thrown away by tapping its bin twice. There's room for 128, eight to a
-page, with arrows either side to turn the pages. They're shared by all
+page, with arrows either side to turn the pages. Empty slots (a +) fill the
+rest of the last page, and there's always one more page of them after it:
+tapping any of them starts a new map, after the others. They're shared by all
 three players, and finishing one doesn't count towards a player's levels.
 
 ## More
