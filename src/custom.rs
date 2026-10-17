@@ -265,6 +265,22 @@ impl CustomMap {
                 .collect();
         }
         level.until = self.until;
+        // "Repeat until" can look for whatever an "if" could (a rock would
+        // look just like a wall, so not that).
+        if self.until {
+            let on_map = |c: char| self.cells.contains(&c);
+            level.until_looks = Sense::ALL
+                .into_iter()
+                .filter(|s| match s {
+                    Sense::Tree => on_map('#') || clouds,
+                    Sense::Ice => on_map('~'),
+                    Sense::Key => on_map('k'),
+                    Sense::Door => on_map('D'),
+                    Sense::Star | Sense::Grass | Sense::Edge => true,
+                    Sense::Rock | Sense::Wall => false,
+                })
+                .collect();
+        }
         level.otherwise = self.otherwise;
         level.functions = self.functions;
         level.numbers = self.numbers;

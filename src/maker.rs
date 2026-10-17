@@ -4,7 +4,7 @@
 use macroquad::prelude::*;
 
 use crate::custom::{self, CustomMap, MAX_MAPS, Tool};
-use crate::level::{Dir, Weather};
+use crate::level::{Dir, Sense, Weather};
 use crate::sound::Sfx;
 use crate::{
     AXE_BROWN, BACK_BUTTON, CALL_INK, DISABLED, Face, GRASS, GRASS_DARK, Game, IF_LIME, INK,
@@ -579,7 +579,7 @@ fn draw_tool_icon(tool: Tool, c: Vec2, half: f32) {
             draw_bracket(r, c.x + size * 0.22, false, WHITE);
         }
         Tool::If => draw_question(c, size * 0.8, WHITE),
-        Tool::Until => draw_until_icon(c, size, Dir::Right),
+        Tool::Until => draw_until_icon(c, size, Dir::Right, Sense::Wall, false),
         Tool::Else => draw_answer(c, false),
         Tool::Fn1 => draw_shape(c, half * 0.55, 1),
         Tool::Fn2 => draw_shape(c, half * 0.55, 2),

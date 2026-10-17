@@ -12,7 +12,7 @@ stars. There's no reading required.
 |---|---|
 | ![Three players, each with their own robot and progress](docs/players.png) | ![Level 48: the main program calls the ● and ▲ functions, and the robot is partway through ▲, chopping a tree](docs/level.png) |
 
-Across 105 levels in 17 chapters, numbered within each chapter (`3-2`), it
+Across 107 levels in 17 chapters, numbered within each chapter (`3-2`), it
 introduces, in the order programming is usually taught:
 
 1. **Moving:** up, down, left and right, in order
@@ -44,7 +44,10 @@ introduces, in the order programming is usually taught:
 12. **Repeat until:** "keep going until there's a wall that way". The robot
     looks before each time round. Mystery clouds decide how far it is, so no
     fixed number of times would do. One that would go round for ever (back
-    where it started, and still no wall) stops and shakes red
+    where it started, and still no wall) stops and shakes red. Then it can
+    look for other things too, picked like an "if": "keep going until
+    there's grass below", and with "not", "keep going down until there's
+    no wall to the right"
 13. **Functions:** extra strips of blocks named with a shape (● and ▲) that
     the main program calls whenever it needs them
 14. **Functions + if:** "if" blocks inside functions
@@ -106,7 +109,8 @@ Some bring others along, as in the game's own levels: loops need repeat;
 "repeat until" and functions need loops; "else" and "not" need an "if"; and
 numbers need a function. Mystery clouds always come with "if" and the axe,
 and rain clouds with sleep. The "if" can look for anything painted on the
-map, grass, and the edge.
+map, grass, and the edge, and "repeat until" for those (but a rock) or a
+wall.
 
 Press play to try the map out. The arrow at the top left goes back to
 everyone's maps, where a map can be played, changed with the pencil, or

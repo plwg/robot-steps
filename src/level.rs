@@ -145,7 +145,7 @@ pub enum Sense {
     Edge,
     /// Anything the robot can't drive onto: a rock, a tree, a locked door it
     /// has no key for, or the edge of the map (but not rain, which passes).
-    /// Only "repeat until" uses it.
+    /// Only "repeat until" looks for it.
     Wall,
 }
 
@@ -161,6 +161,15 @@ impl Sense {
         Sense::Grass,
         Sense::Edge,
     ];
+
+    /// The sense with this letter in program text.
+    fn from_letter(letter: char) -> Sense {
+        *Sense::ALL
+            .iter()
+            .chain([&Sense::Wall])
+            .find(|s| s.letter() == letter)
+            .expect("bad sense")
+    }
 
     /// Its letter after `{` in program text.
     fn letter(self) -> char {
@@ -194,8 +203,12 @@ pub enum Item {
     LoopStart {
         times: u8,
     },
+    /// Runs until the robot sees `sense` in direction `dir` (or with
+    /// `not`, until it doesn't).
     Until {
+        sense: Sense,
         dir: Dir,
+        not: bool,
     },
     LoopEnd,
     /// With `not`, the blocks run if `sense` *isn't* there.
@@ -376,7 +389,7 @@ impl Runner<'_> {
                     }
                     i = end + 1;
                 }
-                Item::Until { dir } => {
+                Item::Until { sense, dir, not } => {
                     let end = (i + 1..to)
                         .find(|&j| items[j] == Item::LoopEnd)
                         .unwrap_or(to);
@@ -384,8 +397,7 @@ impl Runner<'_> {
                     // place, so getting back to one is going round for ever.
                     let mut been = HashSet::new();
                     while !self.stopped {
-                        let yes = self.world.sees(Sense::Wall, dir);
-                        let sense = Sense::Wall;
+                        let yes = self.world.sees(sense, dir) != not;
                         self.emit(Step::Test { sense, dir, yes }, (strip, i), 1, in_loop, ctx);
                         if yes {
                             break;
@@ -481,9 +493,28 @@ pub fn parse_program(text: &str) -> Vec<Item> {
         let item = match (chars.next(), chars.next()) {
             (Some('}'), None) => Item::IfEnd,
             (Some('/'), None) => Item::Else,
-            (Some('<'), Some(d)) => {
+            // `<R` goes on until a wall; `<sR` until a star, `<!tR` until
+            // there's no tree.
+            (Some('<'), Some(first)) => {
                 open = Some(items.len());
-                Item::Until { dir: dir(d) }
+                let not = first == '!';
+                let first = if not {
+                    chars.next().expect("<! needs a sense")
+                } else {
+                    first
+                };
+                match chars.next() {
+                    None => Item::Until {
+                        sense: Sense::Wall,
+                        dir: dir(first),
+                        not,
+                    },
+                    Some(d) => Item::Until {
+                        sense: Sense::from_letter(first),
+                        dir: dir(d),
+                        not,
+                    },
+                }
             }
             (Some('{'), Some(what)) => {
                 let not = what == '!';
@@ -493,10 +524,7 @@ pub fn parse_program(text: &str) -> Vec<Item> {
                     what
                 };
                 Item::IfStart {
-                    sense: *Sense::ALL
-                        .iter()
-                        .find(|s| s.letter() == what)
-                        .expect("bad sense"),
+                    sense: Sense::from_letter(what),
                     dir: dir(chars.next().expect("{ needs a direction")),
                     not,
                 }
@@ -544,6 +572,7 @@ const TREE: &[Sense] = &[Sense::Tree];
 const STAR: &[Sense] = &[Sense::Star];
 const TREE_STAR: &[Sense] = &[Sense::Tree, Sense::Star];
 const ROCK: &[Sense] = &[Sense::Rock];
+const GRASS: &[Sense] = &[Sense::Grass];
 
 pub struct LevelDef {
     /// What the save files call this level. It never changes, wherever the
@@ -564,8 +593,10 @@ pub struct LevelDef {
     /// What the "if" block can look for (none: no "if" block).
     ifs: &'static [Sense],
     /// "Repeat until there's a wall", and "else" and "not" for the "if"
-    /// blocks.
+    /// blocks (and "not" for "repeat until" too).
     until: bool,
+    /// What else "repeat until" can look for, besides a wall.
+    until_looks: &'static [Sense],
     otherwise: bool,
     not: bool,
     /// How many function strips (0, 1 or 2), and how many slots each has.
@@ -590,6 +621,7 @@ const fn level(id: &'static str, map: &'static [&'static str]) -> LevelDef {
         loops: false,
         ifs: &[],
         until: false,
+        until_looks: &[],
         otherwise: false,
         not: false,
         functions: 0,
@@ -641,6 +673,12 @@ impl LevelDef {
     const fn with_until(mut self, slots: usize) -> Self {
         self.until = true;
         self.with_loops(slots)
+    }
+
+    /// Let "repeat until" look for `senses` too (as well as a wall).
+    const fn until_looking_for(mut self, senses: &'static [Sense]) -> Self {
+        self.until_looks = senses;
+        self
     }
 
     /// Unlock "else" for the "if" blocks.
@@ -964,6 +1002,21 @@ pub const CHAPTERS: &[Chapter] = &[
                 .with_until(5),
             level("74", &["R.?...*", "..@@@@.", "..?...."]).with_until(6),
             level("75", &["R..", "...", "?@?", ".@.", ".@.", ".@.", "*.."]).with_until(6),
+            // Not just a wall: "repeat until" can look for grass too. Pick
+            // what it looks for, then which way.
+            level("d-until-look", &["R.....", "@@@.@@", "@@@*@@"])
+                .with_until(3)
+                .until_looking_for(GRASS)
+                .demo("<gD R ] D2"),
+            // Along the top until there's grass below (a cloud that came out
+            // as grass), down through it, and along to the star.
+            level("until-grass", &["R......", "#?????@", "......*"])
+                .with_until(5)
+                .until_looking_for(GRASS),
+            // Down until there's no wall to the right: the way through.
+            level("until-gap", &["R?.", ".?.", ".?.", ".?.", "@@*"])
+                .with_until(5)
+                .with_not(),
         ],
     },
     // A strip of blocks with a shape for a name, which the main program can
@@ -1169,6 +1222,8 @@ pub struct Level {
     /// What the "if" block can look for (none: no "if" block).
     pub ifs: Vec<Sense>,
     pub until: bool,
+    /// What else "repeat until" can look for, besides a wall.
+    pub until_looks: Vec<Sense>,
     pub otherwise: bool,
     pub not: bool,
     pub functions: usize,
@@ -1199,6 +1254,7 @@ impl Level {
         level.loops = def.loops;
         level.ifs = def.ifs.to_vec();
         level.until = def.until;
+        level.until_looks = def.until_looks.to_vec();
         level.otherwise = def.otherwise;
         level.not = def.not;
         level.functions = def.functions;
@@ -1256,6 +1312,7 @@ impl Level {
             loops: false,
             ifs: Vec::new(),
             until: false,
+            until_looks: Vec::new(),
             otherwise: false,
             not: false,
             functions: 0,
@@ -1563,6 +1620,10 @@ mod tests {
         ("until-axe", "<R R ] cR <R R ]"),
         ("74", "<R R ] D2 <R R ] U2"),
         ("75", "<D D ] R2 <D D ] L2"),
+        // `<gD` is "until there's grass below", and `<!wR` "until there's no
+        // wall to the right".
+        ("until-grass", "<gD R ] D2 <R R ]"),
+        ("until-gap", "<!wR D ] R2 <D D ]"),
     ];
 
     /// Known solutions for the function levels: the main strip, then each
@@ -2100,6 +2161,97 @@ mod tests {
                 && let Some(function) = fits_without_numbers(level)
             {
                 panic!("level {} fits with the function {function}", level.id);
+            }
+        }
+    }
+
+    /// Can the level be won in its slots with blocks (counts up to 3, and
+    /// chopping if the level has the axe) and "repeat until" loops looking
+    /// for any of `senses`, with "not" or without as `nots` allows? A search
+    /// that gives up on a program as soon as it loses.
+    fn fits_with_until(level: &Level, senses: &[Sense], nots: &[bool]) -> bool {
+        let mut pieces = Vec::new();
+        for dir in Dir::ALL {
+            for times in 1..=3 {
+                pieces.push(Item::Block(Block {
+                    cmd: Cmd::Move(dir),
+                    times,
+                }));
+            }
+            if level.chop {
+                pieces.push(Item::Block(Block {
+                    cmd: Cmd::Chop(dir),
+                    times: 1,
+                }));
+            }
+            for &sense in senses {
+                for &not in nots {
+                    pieces.push(Item::Until { sense, dir, not });
+                }
+            }
+        }
+        fn search(level: &Level, pieces: &[Item], items: &mut Vec<Item>) -> bool {
+            let Some(worlds) = run(level, items) else {
+                return false;
+            };
+            if won(&worlds) {
+                return true;
+            }
+            let open = items
+                .iter()
+                .rposition(|i| matches!(i, Item::Until { .. }))
+                .filter(|&k| !items[k..].contains(&Item::LoopEnd));
+            if open.is_some_and(|k| tiles(&items[k..]) >= 2) {
+                items.push(Item::LoopEnd);
+                if search(level, pieces, items) {
+                    return true;
+                }
+                items.pop();
+            }
+            if tiles(items) == level.slots {
+                return false;
+            }
+            for &piece in pieces {
+                if open.is_some() && matches!(piece, Item::Until { .. }) {
+                    continue;
+                }
+                items.push(piece);
+                if search(level, pieces, items) {
+                    return true;
+                }
+                items.pop();
+            }
+            false
+        }
+        search(level, &pieces, &mut Vec::new())
+    }
+
+    #[test]
+    fn until_levels_need_what_they_look_for() {
+        for level in numbered().iter().filter(|l| l.until) {
+            let all: Vec<Sense> = [Sense::Wall]
+                .into_iter()
+                .chain(level.until_looks.clone())
+                .collect();
+            let nots: &[bool] = if level.not { &[false, true] } else { &[false] };
+            assert!(
+                fits_with_until(level, &all, nots),
+                "level {} can't be done",
+                level.id
+            );
+            if !level.until_looks.is_empty() {
+                assert!(
+                    !fits_with_until(level, &[Sense::Wall], nots),
+                    "level {} can be done looking for a wall",
+                    level.id
+                );
+            }
+            if level.not {
+                assert!(
+                    !fits_with_until(level, &all, &[false]),
+                    "level {} can be done without not",
+                    level.id
+                );
             }
         }
     }

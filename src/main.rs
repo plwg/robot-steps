@@ -1022,8 +1022,10 @@ struct Game {
     preview: Vec<bool>,
     /// The slider's knob is being dragged.
     sliding: bool,
-    /// The "if" being started is "if there's *no*...".
+    /// The "if" (or "repeat until") being started is "if there's *no*...".
     if_not: bool,
+    /// What the "repeat until" being started looks for, once picked.
+    until_look: Option<Sense>,
     /// This player's best for each level they've finished: kept from the
     /// first time.
     best: progress::Best,
@@ -1165,6 +1167,7 @@ impl Game {
             preview: Vec::new(),
             sliding: false,
             if_not: false,
+            until_look: None,
             best: progress::Best::new(),
             result: None,
             show_best: false,
@@ -1573,10 +1576,13 @@ impl Game {
 
     /// How long looking takes: quicker for a "repeat until".
     fn check_time(&self) -> f32 {
-        match self.trace.get(self.pc).map(|e| e.step) {
-            Some(Step::Test {
-                sense: Sense::Wall, ..
-            }) => UNTIL_LOOK_TIME,
+        let looking = self.trace.get(self.pc).map(|e| (e.step, e.at));
+        match looking {
+            Some((Step::Test { .. }, (strip, i)))
+                if matches!(self.strips[strip].get(i), Some(Item::Until { .. })) =>
+            {
+                UNTIL_LOOK_TIME
+            }
             _ => CHECK_TIME,
         }
     }
@@ -1715,9 +1721,24 @@ impl Game {
         matches!(self.armed, Some(Button::If | Button::Sense(_)))
     }
 
-    /// Is the player choosing what an "if" looks for?
+    /// Is the player choosing what an "if" (or a "repeat until") looks
+    /// for?
     fn picking(&self) -> bool {
         self.armed == Some(Button::If)
+            || (self.armed == Some(Button::Until) && self.until_look.is_none())
+    }
+
+    /// What can be picked: for a "repeat until", a wall and anything else the
+    /// level lets it look for; for an "if", what the level lets that look
+    /// for.
+    fn choices(&self) -> Vec<Sense> {
+        if self.armed == Some(Button::Until) {
+            let mut senses = vec![Sense::Wall];
+            senses.extend(&self.level().until_looks);
+            senses
+        } else {
+            self.level().ifs.clone()
+        }
     }
 
     /// Can the last count be made the function's number? Only in a function,
@@ -1737,7 +1758,7 @@ impl Game {
             Button::Loop => self.level().loops,
             Button::If => !self.level().ifs.is_empty(),
             Button::Sleep => self.level().sleep,
-            Button::Sense(sense) => self.picking() && self.level().ifs.contains(&sense),
+            Button::Sense(sense) => self.picking() && self.choices().contains(&sense),
             Button::Not => self.picking() && self.level().not,
             Button::Else => self.level().otherwise,
             Button::Until => self.level().until,
@@ -1804,7 +1825,9 @@ impl Game {
                         return;
                     }
                     Some(Button::Until) => {
-                        self.insert(Item::Until { dir });
+                        let sense = self.until_look.take().unwrap_or(Sense::Wall);
+                        let not = std::mem::take(&mut self.if_not);
+                        self.insert(Item::Until { sense, dir, not });
                         return;
                     }
                     _ => Cmd::Move(dir),
@@ -1820,6 +1843,9 @@ impl Game {
                     cmd: Cmd::Sleep,
                     times: 1,
                 }));
+            }
+            Button::Sense(sense) if self.armed == Some(Button::Until) => {
+                self.until_look = Some(sense);
             }
             Button::Sense(_) => self.armed = Some(button),
             Button::Not => self.if_not = !self.if_not,
@@ -1862,7 +1888,15 @@ impl Game {
                     }
                     self.insert(Item::LoopEnd);
                 }
-                None => self.armed = (self.armed != Some(button)).then_some(button),
+                // Tapped again while choosing: never mind.
+                None if self.armed == Some(button) => self.armed = None,
+                // Pick what to look for, unless it can only be a wall.
+                None => {
+                    self.armed = Some(button);
+                    self.if_not = false;
+                    let only_walls = self.level().until_looks.is_empty() && !self.level().not;
+                    self.until_look = only_walls.then_some(Sense::Wall);
+                }
             },
             Button::Else => {
                 self.armed = None;
@@ -2273,6 +2307,7 @@ impl Game {
             let senses: Vec<Button> = [Button::Not]
                 .into_iter()
                 .chain(Sense::ALL.map(Button::Sense))
+                .chain([Button::Sense(Sense::Wall)])
                 .filter(|&b| self.visible(b))
                 .collect();
             return match senses.len() {
@@ -2352,9 +2387,10 @@ impl Game {
                     }
                 );
             }
-            Button::Not => "Not: if there's no...",
+            Button::Not => "Not: there's no...",
             Button::Else => "Otherwise",
-            Button::Until => "Repeat until a wall",
+            Button::Until if self.level().until_looks.is_empty() => "Repeat until a wall",
+            Button::Until => "Repeat until...",
             Button::Number => "The function's number",
             Button::Call(1) => "Run the circle function",
             Button::Call(_) => "Run the triangle function",
@@ -3458,7 +3494,7 @@ impl Game {
             },
             Item::LoopStart { .. } | Item::LoopEnd | Item::Else | Item::IfEnd | Item::Gap => {}
             Item::IfStart { sense, dir, not } => draw_if_icon(r.center(), r.w, sense, dir, not),
-            Item::Until { dir } => draw_until_icon(r.center(), r.w, dir),
+            Item::Until { sense, dir, not } => draw_until_icon(r.center(), r.w, dir, sense, not),
             Item::Call(f, _) => draw_shape(r.center(), r.w * 0.28, f),
         }
         if let Some(n) = badge {
@@ -3721,7 +3757,10 @@ impl Game {
                 Button::Arrow(dir) => match self.armed {
                     Some(Button::Axe) => draw_chop_icon(c, size, dir),
                     Some(Button::Sense(sense)) => draw_if_icon(c, size, sense, dir, self.if_not),
-                    Some(Button::Until) => draw_until_icon(c, size, dir),
+                    Some(Button::Until) => {
+                        let sense = self.until_look.unwrap_or(Sense::Wall);
+                        draw_until_icon(c, size, dir, sense, self.if_not)
+                    }
                     _ => draw_arrow(c, size * 0.8, dir, WHITE),
                 },
                 Button::Axe => draw_axe_badge(c, size * 0.75),
@@ -3767,7 +3806,13 @@ impl Game {
                     let r = Rect::new(c.x - half, c.y - half, size, size);
                     draw_bracket(r, c.x + size * 0.22, false, WHITE);
                 }
-                Button::Until => draw_until_icon(c, size, Dir::Right),
+                // Once chosen, what it'll look for.
+                Button::Until => match (self.armed, self.until_look) {
+                    (Some(Button::Until), Some(sense)) => {
+                        draw_until_icon(c, size, Dir::Right, sense, self.if_not)
+                    }
+                    _ => draw_until_icon(c, size, Dir::Right, Sense::Wall, false),
+                },
                 Button::Number => draw_number_icon(c, half, self.editing.max(1)),
                 Button::Loop => {
                     let r = Rect::new(c.x - half, c.y - half, size, size);
@@ -4090,10 +4135,15 @@ fn draw_sense(c: Vec2, size: f32, sense: Sense) {
     }
 }
 
-/// "Repeat until there's a wall that way": a rock, an arrow, and the loop
+/// "Repeat until there's a wall (or a star...) that way": what it looks for
+/// (crossed out with `not`: "until there's no..."), an arrow, and the loop
 /// arrow.
-fn draw_until_icon(c: Vec2, size: f32, dir: Dir) {
-    draw_sense(c - vec2(size * 0.16, size * 0.02), size * 0.55, Sense::Wall);
+fn draw_until_icon(c: Vec2, size: f32, dir: Dir, sense: Sense, not: bool) {
+    let at = c - vec2(size * 0.16, size * 0.02);
+    draw_sense(at, size * 0.55, sense);
+    if not {
+        draw_no_slash(at, size * 0.24);
+    }
     draw_arrow(c + vec2(size * 0.24, size * 0.16), size * 0.4, dir, WHITE);
     draw_loop_icon(c + vec2(size * 0.24, -size * 0.2), size * 0.3, WHITE);
 }
