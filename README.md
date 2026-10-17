@@ -99,6 +99,8 @@ first time they finish it: the fewest blocks and the fewest turns, each on
 its own. A finished level has a trophy next to its number: tap it to see
 them (a block and a clock), to play it again and beat them. The game
 draws a big, easy-to-spot pointer. Resting the pointer on a button for a moment shows its name.
+Played by touch, there's no pointer (or names). On a phone held upright, the
+game is drawn on its side to fill the screen: turn the phone to play.
 
 ## Making maps
 

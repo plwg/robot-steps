@@ -159,7 +159,7 @@ fn draw_quad(a: Vec2, b: Vec2, c: Vec2, d: Vec2, color: Color) {
 /// Text centred on a point. Rendered at the real screen resolution so it
 /// stays sharp however much the canvas is scaled up.
 fn draw_label(text: &str, centre: Vec2, size: f32, color: Color) {
-    let scale = (screen_width() / W).min(screen_height() / H) * screen_dpi_scale();
+    let scale = view_scale() * screen_dpi_scale();
     let font_size = (size * scale).round() as u16;
     let dims = measure_text(text, None, font_size, 1.0 / scale);
     draw_text_ex(
@@ -796,7 +796,7 @@ fn draw_trophy(c: Vec2, size: f32, colour: Color) {
 
 /// Text starting at `left` (and centred up and down on it).
 fn draw_label_left(text: &str, left: Vec2, size: f32, color: Color) {
-    let scale = (screen_width() / W).min(screen_height() / H) * screen_dpi_scale();
+    let scale = view_scale() * screen_dpi_scale();
     let font_size = (size * scale).round() as u16;
     let dims = measure_text(text, None, font_size, 1.0 / scale);
     draw_label(text, left + vec2(dims.width / 2.0, 0.0), size, color);
@@ -1003,6 +1003,9 @@ struct Game {
     erase_armed: Option<(usize, f32)>,
     /// Where the mouse is, and recent clicks (for the ripple).
     mouse: Vec2,
+    /// Played by touch (no pointer to draw, or to rest on a button) since
+    /// the last time a mouse moved.
+    touch: bool,
     clicks: Vec<(Vec2, f32)>,
     sounds: Sounds,
     muted: bool,
@@ -1156,6 +1159,7 @@ impl Game {
             finished: [0; progress::SLOTS],
             erase_armed: None,
             mouse: vec2(W / 2.0, H / 2.0),
+            touch: false,
             clicks: Vec::new(),
             sounds,
             muted: false,
@@ -2855,7 +2859,7 @@ impl Game {
         }
         draw_fullscreen_icon(vec2(1386.0, 36.0), 22.0, INK);
         draw_speaker_icon(SOUND_BUTTON, 22.0, !self.muted, INK);
-        if self.screen == Screen::Play {
+        if self.screen == Screen::Play && !self.touch {
             self.draw_tooltip();
         }
         self.draw_cursor();
@@ -3180,6 +3184,10 @@ impl Game {
                 let k = age / 0.4;
                 draw_circle_lines(at.x, at.y, 12.0 + k * 30.0, 5.0 * (1.0 - k), STAR);
             }
+        }
+        // A finger doesn't need a pointer.
+        if self.touch {
+            return;
         }
         let p = self.mouse;
         // A bright yellow ring around the tip, gently pulsing.
@@ -4056,7 +4064,7 @@ fn draw_title(centre: Vec2, time: f32) {
         UNDO_YELLOW,
         PLAY_GREEN,
     ];
-    let scale = (screen_width() / W).min(screen_height() / H) * screen_dpi_scale();
+    let scale = view_scale() * screen_dpi_scale();
     let width =
         |text: &str| measure_text(text, None, (SIZE * scale).round() as u16, 1.0 / scale).width;
     let spacing = 6.0;
@@ -4321,11 +4329,29 @@ fn draw_axe_badge(c: Vec2, size: f32) {
 /// A camera that maps the fixed W x H canvas onto the window, letterboxed.
 fn fit_camera() -> Camera2D {
     let (sw, sh) = (screen_width(), screen_height());
-    let scale = (sw / W).min(sh / H);
+    let scale = view_scale();
     Camera2D {
         target: vec2(W / 2.0, H / 2.0),
         zoom: vec2(2.0 * scale / sw, 2.0 * scale / sh),
+        rotation: if sideways() { 90.0 } else { 0.0 },
         ..Default::default()
+    }
+}
+
+/// On a screen taller than it is wide (a phone held upright), the game is
+/// drawn on its side, filling it: turning the phone puts it the right way up
+/// (and if the phone turns the page too, it's drawn the usual way).
+fn sideways() -> bool {
+    screen_height() > screen_width()
+}
+
+/// How much bigger than the canvas the game is drawn, letterboxed.
+fn view_scale() -> f32 {
+    let (sw, sh) = (screen_width(), screen_height());
+    if sideways() {
+        (sw / H).min(sh / W)
+    } else {
+        (sw / W).min(sh / H)
     }
 }
 
@@ -4371,10 +4397,19 @@ async fn main() {
     let mut game = Game::new(start_fullscreen(), Sounds::new().await);
     // The game draws its own big pointer instead.
     show_mouse(false);
+    let mut pointer = mouse_position();
     loop {
         let camera = fit_camera();
         set_camera(&camera);
-        game.mouse = camera.screen_to_world(mouse_position().into());
+        // A touch moves the pointer too, so only a move without one is a
+        // mouse.
+        if !touches().is_empty() {
+            game.touch = true;
+        } else if mouse_position() != pointer {
+            game.touch = false;
+        }
+        pointer = mouse_position();
+        game.mouse = camera.screen_to_world(pointer.into());
         if is_mouse_button_pressed(MouseButton::Left) {
             game.handle_click(game.mouse);
         }
