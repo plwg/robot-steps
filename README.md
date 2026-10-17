@@ -29,10 +29,10 @@ each as something a robot on a map can do.
 | Conditionals (`if`) | Mystery clouds turn out differently each run: "if there's a tree to the right { chop it }" | 7 If |
 | Loops (`for` n times) | Brackets round a group of blocks, with a count | 8 Loops |
 | Nesting | An "if" inside a loop: one rule for whatever comes | 9 If inside loops |
-| `if` / `else` | "Otherwise", after the grey ✗ | 10 Else |
-| Negation (`not`) | The red "no" sign: "if there's *no* tree" | 11 Not |
+| `if` / `else` | An "if" splits in two: the yes blocks along the top, the "otherwise" blocks in a grey lane underneath | 10 Else |
+| Negation (`not`) | A crossed-out choice: "if there's *no* tree" | 11 Not |
 | `while` loops | "While there's grass to the right { go right }", looking before each time round | 12 While |
-| `while true` and `break` | "While true" (a tick) goes round until a break leaves the loop | 13 Break |
+| `while true` and `break` | "While true" (a tick) goes round until a break (a doorway with an arrow going out) leaves the loop | 13 Break |
 | Functions | Strips named ● and ▲ that the main program calls | 14 Functions, 15 Functions + if |
 | Parameters | Call ● with a number, and use "●'s number" as a count inside it | 16 Function numbers |
 | Timing | Rain clouds rain on a cycle: sleep, or hurry | 17 Rain |
@@ -106,9 +106,14 @@ maps.
   after it. Play always runs from the start, picks the mystery clouds again,
   and the slider follows that run.
 - **Fewer buttons:** blocks that only make sense inside another one are in a
-  second menu. Tapping "if" shows what it can look for (and "not"); tapped
-  while an "if" is open, it shows "else" and the end of the "if" (`]`).
-  Loops and "while" do the same, with break.
+  second menu. Tapping "if" shows what it can look for, each also crossed
+  out for "not" (with more than five choices, "not" is a button of its own
+  instead); tapped while an "if" is open, it shows "otherwise" (a fork) and
+  the end of the "if" (`]`). Loops and "while" do the same, with break (a
+  doorway with an arrow going out).
+- **Split tracks:** an "if" with an "otherwise" splits in two: the blocks
+  for yes along the top on green, and the blocks for no in a grey lane
+  underneath, both ending at one tall `]`.
 - **Debugging:** when the robot bumps into something, the step that went
   wrong shakes red, and the program stays put to be fixed. Tapping a block
   opens an empty slot before it for a missing step, and the eraser that

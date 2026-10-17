@@ -10,8 +10,8 @@ a key too, for grown-ups.
 | R / 2-9 | Repeat the last block (or loop) |
 | L | Open or close a loop |
 | I, then a choice and an arrow | Start an "if" (again to close) |
-| X (while choosing) | "Not": if there's *no*... |
-| E | Else, inside an "if" |
+| X (while choosing) | "Not": if there's *no*... (where "not" is a button of its own) |
+| E | Otherwise, inside an "if" |
 | W, then a choice and an arrow | Start a "while" (again to close) |
 | B | Break, inside a loop |
 | Z | Sleep a tick |

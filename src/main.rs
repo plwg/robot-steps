@@ -84,6 +84,9 @@ const FN_COLOURS: [Color; 2] = [
 const CALL_INK: Color = Color::new(0.24, 0.27, 0.4, 1.0);
 const IF_LIME: Color = Color::new(0.5, 0.72, 0.1, 1.0);
 const IF_BAND: Color = Color::new(0.85, 0.94, 0.7, 1.0);
+/// Behind the "otherwise" lane of an "if": grey, for no.
+const ELSE_BAND: Color = Color::new(0.84, 0.86, 0.88, 1.0);
+const ELSE_GREY: Color = Color::new(0.55, 0.58, 0.62, 1.0);
 const YES_GREEN: Color = Color::new(0.2, 0.75, 0.3, 1.0);
 const NO_GREY: Color = Color::new(0.55, 0.58, 0.62, 1.0);
 const LOOP_BAND: Color = Color::new(0.72, 0.9, 0.9, 1.0);
@@ -896,6 +899,8 @@ enum Button {
     If,
     /// What an "if" looks for, offered after tapping "if".
     Sense(Sense),
+    /// The same crossed out: "if there's *no*...".
+    SenseNot(Sense),
     /// Offered with them: "if there's *no*...".
     Not,
     /// "Otherwise": the blocks after it run when the "if" says no.
@@ -1869,6 +1874,12 @@ impl Game {
         self.visible(button) && self.enabled(button)
     }
 
+    /// Is "not" offered as a crossed-out copy of each choice (when there's
+    /// room), rather than a button of its own?
+    fn crossed_out(&self) -> bool {
+        self.picking() && self.not_offered() && self.choices().len() <= 5
+    }
+
     /// Is the menu for ending an "if" (else) or a loop (break) showing?
     fn ending(&self) -> bool {
         matches!(self.armed, Some(Button::Else | Button::Break))
@@ -1936,8 +1947,11 @@ impl Game {
             Button::If => !self.level().ifs.is_empty(),
             Button::Sleep => self.level().sleep,
             Button::Sense(sense) => self.picking() && self.choices().contains(&sense),
+            Button::SenseNot(sense) => {
+                self.crossed_out() && self.choices().contains(&sense) && sense != Sense::True
+            }
             Button::Break => self.level().breaks,
-            Button::Not => self.picking() && self.not_offered(),
+            Button::Not => self.picking() && self.not_offered() && !self.crossed_out(),
             Button::Else => self.level().otherwise,
             Button::While => self.level().whiles,
             Button::Number => self.level().numbers,
@@ -1952,7 +1966,7 @@ impl Game {
             // While choosing what to look for, the arrows wait until
             // something's picked.
             Button::Arrow(_) => editing && self.can_place() && !self.picking() && !self.ending(),
-            Button::Axe | Button::Sleep | Button::Sense(_) | Button::Not => {
+            Button::Axe | Button::Sleep | Button::Sense(_) | Button::SenseNot(_) | Button::Not => {
                 editing && self.can_place()
             }
             // A loop can hold an "if", but an "if" can't hold a loop.
@@ -1999,6 +2013,10 @@ impl Game {
         if button != Button::Play || self.running() {
             self.sfx(Sfx::Tap);
         }
+        // A choice that isn't crossed out is "there's a...".
+        if matches!(button, Button::Sense(_)) && self.crossed_out() {
+            self.if_not = false;
+        }
         match button {
             Button::Arrow(dir) => {
                 let cmd = match self.armed.take() {
@@ -2029,6 +2047,15 @@ impl Game {
                     cmd: Cmd::Sleep,
                     times: 1,
                 }));
+            }
+            // Crossed out, or not: with "not" offered that way, each choice
+            // says which.
+            Button::SenseNot(sense) => {
+                self.if_not = true;
+                match self.armed {
+                    Some(Button::While) => self.pick_while(sense),
+                    _ => self.armed = Some(Button::Sense(sense)),
+                }
             }
             Button::Sense(sense) if self.armed == Some(Button::While) => self.pick_while(sense),
             // "If true" looks no way in particular: it starts straight away.
@@ -2531,6 +2558,17 @@ impl Game {
         // While choosing what an "if" looks for, the choices take the tools'
         // place.
         if self.picking() {
+            // Each choice, and under it, the same crossed out.
+            if self.crossed_out() {
+                let choices = self.choices();
+                let plain = choices.iter().map(|&s| Button::Sense(s)).collect();
+                let crossed = choices
+                    .iter()
+                    .filter(|&&s| s != Sense::True)
+                    .map(|&s| Button::SenseNot(s))
+                    .collect();
+                return vec![plain, crossed];
+            }
             let senses: Vec<Button> = [Button::Not]
                 .into_iter()
                 .chain(Sense::ALL.map(Button::Sense))
@@ -2619,6 +2657,7 @@ impl Game {
                 );
             }
             Button::Not => "Not: there's no...",
+            Button::SenseNot(_) => "There's none of it",
             Button::Else => "Otherwise",
             Button::While => "While...",
             Button::Break => "Break: leave the loop",
@@ -2788,10 +2827,12 @@ impl Game {
         ((BOARD.w + SLOT_GAP) / cols as f32 - SLOT_GAP).clamp(SLOT, BIG_SLOT)
     }
 
-    /// The top of the main program, without functions: as low as two rows of
-    /// tiles go.
+    /// The top of the main program, without functions: as low as its rows
+    /// go (at least two, and an "otherwise" lane adds one).
     fn strip_y(&self) -> f32 {
-        STRIP_Y - 2.0 * (self.slot() - SLOT)
+        let rows = self.shape(0).rows.max(2) as f32;
+        let bottom = STRIP_Y + 2.0 * (SLOT + SLOT_GAP) - SLOT_GAP;
+        bottom - (rows * (self.slot() + SLOT_GAP) - SLOT_GAP)
     }
 
     /// The size of the eraser that appears on a program block under the
@@ -2817,12 +2858,12 @@ impl Game {
         let strips = self.strips.len();
         let widest = (0..strips).map(|s| self.slots_of(s) + 1).max().unwrap_or(1);
         let x = BOARD.center().x - (widest as f32 * step - SLOT_GAP) / 2.0;
-        // Each strip is a panel (one row plus padding) with a gap between.
-        let panel = slot + 24.0;
+        // Each strip is a panel (its rows plus padding) with a gap between.
+        let panel = |s: usize| self.shape(s).rows as f32 * step - SLOT_GAP + 24.0;
         let gap = 14.0;
-        let total = strips as f32 * panel + (strips - 1) as f32 * gap;
-        let top = H - 8.0 - total;
-        vec2(x, top + 12.0 + strip as f32 * (panel + gap))
+        let total: f32 = (0..strips).map(panel).sum::<f32>() + (strips - 1) as f32 * gap;
+        let above: f32 = (0..strip).map(|s| panel(s) + gap).sum();
+        vec2(x, H - 8.0 - total + 12.0 + above)
     }
 
     fn label_rect(&self, strip: usize) -> Rect {
@@ -2833,47 +2874,18 @@ impl Game {
     /// Where each part of a strip goes. Tiles run along in rows; each loop
     /// bracket takes a narrow gap between two tiles.
     fn layout(&self, strip: usize) -> StripLayout {
-        let cols = self.strip_cols(strip);
-        let slot = self.slot();
-        let step = slot + SLOT_GAP;
+        let shape = self.shape(strip);
         let o = self.strip_origin(strip);
-        let x0 = if self.labelled() { o.x + step } else { o.x };
-        let (mut x, mut y, mut col) = (x0, o.y, 0);
-        let wrap = |x: &mut f32, y: &mut f32, col: &mut usize| {
-            if *col == cols {
-                *col = 0;
-                *x = x0;
-                *y += step;
-            }
-        };
-        let mut items = Vec::new();
-        for item in &self.strips[strip] {
-            if item.is_tile() {
-                wrap(&mut x, &mut y, &mut col);
-                items.push(Rect::new(x, y, slot, slot));
-                x += step;
-                col += 1;
-            } else {
-                if matches!(item, Item::LoopStart { .. }) {
-                    wrap(&mut x, &mut y, &mut col);
-                }
-                items.push(Rect::new(x - SLOT_GAP / 2.0, y, BRACKET_W, slot));
-                x += BRACKET_W;
-            }
-        }
-        let used = tiles(&self.strips[strip]);
-        let mut empty = Vec::new();
-        for _ in used..self.slots_of(strip) {
-            wrap(&mut x, &mut y, &mut col);
-            empty.push(Rect::new(x, y, slot, slot));
-            x += step;
-            col += 1;
-        }
+        let at = |r: &Rect| Rect::new(r.x + o.x, r.y + o.y, r.w, r.h);
+        let items: Vec<Rect> = shape.items.iter().map(at).collect();
+        let empty: Vec<Rect> = shape.empty.iter().map(at).collect();
         // The panel fits a full row of tiles, plus any brackets.
-        let full_row = x0 + cols as f32 * step - SLOT_GAP;
+        let step = self.slot() + SLOT_GAP;
+        let x0 = if self.labelled() { o.x + step } else { o.x };
+        let full_row = x0 + self.strip_cols(strip) as f32 * step - SLOT_GAP;
         let all = items.iter().chain(&empty);
         let right = all.clone().map(Rect::right).fold(full_row, f32::max);
-        let bottom = all.map(Rect::bottom).fold(o.y + slot, f32::max);
+        let bottom = all.map(Rect::bottom).fold(o.y + self.slot(), f32::max);
         let panel = Rect::new(
             o.x - 12.0,
             o.y - 12.0,
@@ -2884,6 +2896,97 @@ impl Game {
             items,
             empty,
             panel,
+        }
+    }
+
+    /// The strip laid out from its top left corner (its label's, with
+    /// functions). An "if" with an "otherwise" takes two lanes: the blocks
+    /// for yes along the top, and those for no in a row underneath, both
+    /// ending at one tall `]`.
+    fn shape(&self, strip: usize) -> Shape {
+        let cols = self.strip_cols(strip);
+        let slot = self.slot();
+        let step = slot + SLOT_GAP;
+        let x0 = if self.labelled() { step } else { 0.0 };
+        let mut at = Cursor {
+            row: 0,
+            x: x0,
+            col: 0,
+            lowest: 0,
+        };
+        let y = |row: usize| row as f32 * step;
+        // The "if" being laid out: where it started, and with an
+        // "otherwise", where the yes lane got to.
+        let mut if_start: Option<Cursor> = None;
+        let mut yes_end: Option<Cursor> = None;
+        let mut items = Vec::new();
+        for item in &self.strips[strip] {
+            match item {
+                Item::Else if if_start.is_some() => {
+                    let start = if_start.expect("checked");
+                    yes_end = Some(at);
+                    // The no lane starts under the yes lane, on a row of its
+                    // own.
+                    let row = at.lowest + 1;
+                    let (x, col) = if start.row == at.row {
+                        (start.x, start.col)
+                    } else {
+                        (x0, 0)
+                    };
+                    items.push(Rect::new(x - SLOT_GAP / 2.0, y(row), BRACKET_W, slot));
+                    at = Cursor {
+                        row,
+                        x: x + BRACKET_W,
+                        col,
+                        lowest: row,
+                    };
+                }
+                Item::IfEnd if yes_end.is_some() => {
+                    let yes = yes_end.take().expect("checked");
+                    let x = yes.x.max(at.x);
+                    let height = y(at.row) - y(yes.row) + slot;
+                    items.push(Rect::new(x - SLOT_GAP / 2.0, y(yes.row), BRACKET_W, height));
+                    at = Cursor {
+                        row: yes.row,
+                        x: x + BRACKET_W,
+                        col: yes.col.max(at.col),
+                        lowest: at.lowest,
+                    };
+                    if_start = None;
+                }
+                _ if item.is_tile() => {
+                    at.wrap(cols, x0);
+                    items.push(Rect::new(at.x, y(at.row), slot, slot));
+                    at.x += step;
+                    at.col += 1;
+                    if matches!(item, Item::IfStart { .. }) {
+                        if_start = Some(at);
+                    }
+                }
+                _ => {
+                    if matches!(item, Item::LoopStart { .. }) {
+                        at.wrap(cols, x0);
+                    }
+                    if *item == Item::IfEnd {
+                        if_start = None;
+                    }
+                    items.push(Rect::new(at.x - SLOT_GAP / 2.0, y(at.row), BRACKET_W, slot));
+                    at.x += BRACKET_W;
+                }
+            }
+        }
+        let used = tiles(&self.strips[strip]);
+        let mut empty = Vec::new();
+        for _ in used..self.slots_of(strip) {
+            at.wrap(cols, x0);
+            empty.push(Rect::new(at.x, y(at.row), slot, slot));
+            at.x += step;
+            at.col += 1;
+        }
+        Shape {
+            items,
+            empty,
+            rows: at.lowest + 1,
         }
     }
 
@@ -3773,13 +3876,13 @@ impl Game {
         }
     }
 
-    /// "Else" between two tiles: a bar with a grey cross on top, the "no"
-    /// an "if" gives when the blocks after it run.
+    /// The start of an "otherwise" lane: a grey tab with the fork that
+    /// turns off down into it.
     fn draw_else(r: Rect, colour: Color) {
-        let t = 7.0;
-        let (top, bottom) = (r.y - 4.0, r.bottom() + 4.0);
-        draw_rectangle(r.center().x - t / 2.0, top, t, bottom - top, colour);
-        draw_answer(vec2(r.center().x, top - 2.0), false);
+        let _ = colour;
+        rounded_rect(r.x, r.y + 4.0, r.w, r.h, 8.0, darker(ELSE_GREY, 0.7));
+        rounded_rect(r.x, r.y, r.w, r.h, 8.0, ELSE_GREY);
+        draw_fork_icon(r.center(), r.w * 1.6, WHITE);
     }
 
     fn draw_program(&self) {
@@ -3867,10 +3970,28 @@ impl Game {
                     continue;
                 }
                 let end = pair_ends(items, i).and_then(|(_, e)| e);
-                let mut rects: Vec<Rect> =
-                    layout.items[i..=end.unwrap_or(items.len() - 1)].to_vec();
+                let last = end.unwrap_or(items.len() - 1);
+                let mut rects: Vec<Rect> = layout.items[i..=last].to_vec();
                 if end.is_none() {
                     rects.extend(layout.empty.first());
+                }
+                // An "if" with an "otherwise": green along the yes lane, grey
+                // along the no lane, both up to the end.
+                let otherwise = matches!(item, Item::IfStart { .. })
+                    .then(|| (i..=last).find(|&k| items[k] == Item::Else))
+                    .flatten();
+                if let Some(e) = otherwise {
+                    let mut no = rects.split_off(e - i);
+                    if let Some(end) = end {
+                        let r = layout.items[end];
+                        let lane = no[0].y;
+                        no.retain(|n| n.y == lane);
+                        no.push(Rect::new(r.x, lane, r.w, no[0].h));
+                        rects.push(Rect::new(r.x, r.y, r.w, rects[0].h));
+                    }
+                    draw_band(&rects, band);
+                    draw_band(&no, ELSE_BAND);
+                    continue;
                 }
                 draw_band(&rects, band);
             }
@@ -3979,7 +4100,11 @@ impl Game {
                 Button::Axe => (AXE_BROWN, 18.0),
                 Button::Sleep => (SLEEP_SLATE, 18.0),
                 Button::Repeat | Button::Loop => (REPEAT_TEAL, 18.0),
-                Button::If | Button::Sense(_) | Button::Not | Button::Else => (IF_LIME, 18.0),
+                Button::If
+                | Button::Sense(_)
+                | Button::SenseNot(_)
+                | Button::Not
+                | Button::Else => (IF_LIME, 18.0),
                 Button::While => (REPEAT_TEAL, 18.0),
                 Button::Break => (BREAK_PLUM, 18.0),
                 Button::Close if self.armed == Some(Button::Else) => (IF_LIME, 18.0),
@@ -4059,9 +4184,15 @@ impl Game {
                     let k = half - 5.0;
                     rounded_rect(c.x - k, c.y - k, k * 2.0, k * 2.0, 12.0, GRASS);
                     draw_sense(c, size * 0.95, sense);
-                    if self.if_not && sense != Sense::True {
+                    if self.if_not && sense != Sense::True && !self.crossed_out() {
                         draw_no_slash(c, size * 0.32);
                     }
+                }
+                Button::SenseNot(sense) => {
+                    let k = half - 5.0;
+                    rounded_rect(c.x - k, c.y - k, k * 2.0, k * 2.0, 12.0, GRASS);
+                    draw_sense(c, size * 0.95, sense);
+                    draw_no_slash(c, size * 0.32);
                 }
                 // Lit up while it's on.
                 Button::Not => {
@@ -4071,7 +4202,7 @@ impl Game {
                     }
                     draw_no_sign(c, size * 0.3);
                 }
-                Button::Else => draw_answer(c, false),
+                Button::Else => draw_fork_icon(c, size, WHITE),
                 Button::Break => draw_break_icon(c, size),
                 Button::Close => {
                     let r = Rect::new(c.x - half, c.y - half, size, size);
@@ -4302,6 +4433,35 @@ fn draw_map_icon(c: Vec2, r: f32) {
     draw_star(pts[2] + vec2(0.0, -r * 0.05), r * 0.22, 0.0, STAR);
 }
 
+/// Where the next tile of a strip goes while it's laid out: its row, how
+/// far along, how many tiles that row has, and the lowest row used so far.
+#[derive(Clone, Copy)]
+struct Cursor {
+    row: usize,
+    x: f32,
+    col: usize,
+    lowest: usize,
+}
+
+impl Cursor {
+    /// A full row goes on below everything so far.
+    fn wrap(&mut self, cols: usize, x0: f32) {
+        if self.col >= cols {
+            self.row = self.lowest + 1;
+            self.lowest = self.row;
+            self.x = x0;
+            self.col = 0;
+        }
+    }
+}
+
+/// A strip laid out from its top left corner, and how many rows it takes.
+struct Shape {
+    items: Vec<Rect>,
+    empty: Vec<Rect>,
+    rows: usize,
+}
+
 /// Where each part of a program strip goes on screen.
 struct StripLayout {
     /// One rect per item: a tile for each block or call, and a narrow gap
@@ -4457,16 +4617,33 @@ fn draw_while_icon(c: Vec2, size: f32, dir: Dir, sense: Sense, not: bool) {
 }
 
 /// A break: the end of a loop, broken, and an arrow out through the gap.
+/// A break: a doorway, and an arrow going out through it.
 fn draw_break_icon(c: Vec2, size: f32) {
-    let x = c.x + size * 0.1;
-    let (h, t) = (size * 0.28, size * 0.08);
-    let serif = size * 0.14;
-    for (y0, y1) in [(c.y - h, c.y - size * 0.1), (c.y + size * 0.1, c.y + h)] {
-        draw_line(x, y0, x, y1, t, WHITE);
-    }
-    draw_line(x - serif, c.y - h, x + t / 2.0, c.y - h, t, WHITE);
-    draw_line(x - serif, c.y + h, x + t / 2.0, c.y + h, t, WHITE);
-    draw_arrow(c + vec2(size * 0.04, 0.0), size * 0.62, Dir::Right, WHITE);
+    let (w, h, t) = (size * 0.3, size * 0.56, size * 0.07);
+    let (left, top) = (c.x - size * 0.3, c.y - h / 2.0);
+    // The door frame, open on the right.
+    draw_line(left, top, left + w, top, t, WHITE);
+    draw_line(left, top + h, left + w, top + h, t, WHITE);
+    draw_line(left, top - t / 2.0, left, top + h + t / 2.0, t, WHITE);
+    draw_arrow(c + vec2(size * 0.08, 0.0), size * 0.55, Dir::Right, WHITE);
+}
+
+/// "Otherwise": a path that forks, turning off down a second way.
+fn draw_fork_icon(c: Vec2, size: f32, colour: Color) {
+    let t = size * 0.08;
+    let (a, b) = (
+        c + vec2(-size * 0.3, -size * 0.18),
+        c + vec2(-size * 0.08, -size * 0.18),
+    );
+    draw_line(a.x, a.y, b.x + t / 2.0, b.y, t, colour);
+    let bend = c + vec2(-size * 0.08, size * 0.16);
+    draw_line(b.x, b.y - t / 2.0, bend.x, bend.y, t, colour);
+    draw_arrow(
+        c + vec2(size * 0.1, size * 0.16),
+        size * 0.4,
+        Dir::Right,
+        colour,
+    );
 }
 
 /// "The function's number": its shape in a badge, like a count.
