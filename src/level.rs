@@ -149,7 +149,8 @@ pub enum Sense {
     /// Not offered any more (it looks just like a rock); program text
     /// still has it.
     Wall,
-    /// Always there: "while true" goes round for ever, until a break.
+    /// Always there: "while true" goes round for ever, until a break (or the
+    /// last star). Every "while" can pick it.
     True,
 }
 
@@ -660,7 +661,7 @@ pub struct LevelDef {
     whiles: bool,
     /// What "while" can look for.
     while_looks: &'static [Sense],
-    /// The break block (and "while true", which goes round until one).
+    /// The break block.
     breaks: bool,
     otherwise: bool,
     not: bool,
@@ -742,7 +743,7 @@ impl LevelDef {
         self.with_loops(slots)
     }
 
-    /// Unlock the break block, and "while true" to go with it.
+    /// Unlock the break block.
     const fn with_break(mut self) -> Self {
         self.breaks = true;
         self
@@ -1329,7 +1330,7 @@ pub struct Level {
     /// "While there's *no*...": the game's own levels have it with "not" for
     /// the "if" too, and made-up maps always.
     pub while_not: bool,
-    /// The break block, and "while true".
+    /// The break block.
     pub breaks: bool,
     pub otherwise: bool,
     pub not: bool,

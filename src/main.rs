@@ -1831,9 +1831,9 @@ impl Game {
             || (self.armed == Some(Button::While) && self.while_look.is_none())
     }
 
-    /// What can be picked: for a "while", what the level lets it look for
-    /// (and "true", with a break to end it); for an "if", what the level lets
-    /// that look for.
+    /// What can be picked: for a "while", what the level lets it look for,
+    /// and "true" (which goes until a break, or the last star); for an "if",
+    /// what the level lets that look for.
     fn choices(&self) -> Vec<Sense> {
         if self.armed == Some(Button::While) {
             Self::while_choices(self.level())
@@ -1844,9 +1844,7 @@ impl Game {
 
     fn while_choices(level: &Level) -> Vec<Sense> {
         let mut senses = level.while_looks.clone();
-        if level.breaks {
-            senses.push(Sense::True);
-        }
+        senses.push(Sense::True);
         senses
     }
 
@@ -2500,7 +2498,7 @@ impl Game {
             let senses: Vec<Button> = [Button::Not]
                 .into_iter()
                 .chain(Sense::ALL.map(Button::Sense))
-                .chain([Button::Sense(Sense::Wall)])
+                .chain([Button::Sense(Sense::Wall), Button::Sense(Sense::True)])
                 .filter(|&b| self.visible(b))
                 .collect();
             return match senses.len() {

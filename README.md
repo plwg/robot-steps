@@ -70,7 +70,8 @@ each as something a robot on a map can do.
 12. **While:** "while there's grass to the right { go right }". Pick what to
     look for, like an "if", then which way. The clouds decide how far it is,
     so no fixed count would do. With "not": "while there's *no* tree below
-    { go down }"
+    { go down }". "While true" (a tick) is always one of the choices: it
+    keeps going until the last star, or a break
 13. **Break:** "while true { go right; if there's grass below { break } }".
     A break leaves a counted loop early too. These levels have no counts, so
     going the long way round doesn't fit
@@ -138,12 +139,12 @@ The buttons under the tiles choose the blocks it allows: the axe, sleep,
 repeat, loops, "while", "if", "else", "not", the two functions and numbers
 for them, and break. Some bring others along, as in the game's own levels:
 loops need repeat; "while" and functions need loops; "else" and "not" need
-an "if"; numbers need a function; and break needs a loop and an "if" (and
-with "while", it brings "while true"). Mystery clouds always come with "if"
+an "if"; numbers need a function; and break needs a loop and an "if".
+Mystery clouds always come with "if"
 and the axe, and rain clouds with sleep. The "if" and "while" can look for
 anything painted on the map, grass, and the edge, and "while" always has
-"not" too ("while there's *no* tree"); the "if" has it with the "not"
-button.
+"not" too ("while there's *no* tree"), and "true"; the "if" has "not" with
+the "not" button.
 
 Press play to try the map out. The arrow at the top left goes back to
 everyone's maps, where a map can be played, changed with the pencil, or
