@@ -524,34 +524,39 @@ pub fn draw_water(x: f32, y: f32, cell: f32, time: f32) {
     }
 }
 
-/// A wooden bridge across a tile, crossed left to right (or, `upright`, up
-/// and down), `sink` (0 to 1) of the way to falling in: it drops and fades
-/// as it goes.
+/// A lily pad floating on the water, which holds the robot once. `sink` (0
+/// to 1) takes it under. Its notch faces along the way across: `upright`
+/// for up and down.
 pub fn draw_bridge(c: Vec2, cell: f32, sink: f32, upright: bool) {
     let s = cell;
-    let c = c + vec2(0.0, sink * s * 0.25);
+    let c = c + vec2(0.0, sink * s * 0.12);
     let fade = |col: Color| Color::new(col.r, col.g, col.b, col.a * (1.0 - sink));
-    let len = s * (1.0 - sink * 0.3);
-    // A rectangle `along` the way across and `side` to one side, turned
-    // for an upright bridge.
-    let rect = |along: f32, side: f32, l: f32, w: f32, colour: Color| {
-        if upright {
-            draw_rectangle(c.x + side, c.y + along, w, l, colour);
-        } else {
-            draw_rectangle(c.x + along, c.y + side, l, w, colour);
-        }
-    };
-    // Rails along each side, and planks across.
-    let rail = fade(darker(WOOD, 0.8));
-    rect(-len / 2.0, -s * 0.32, len, s * 0.07, rail);
-    rect(-len / 2.0, s * 0.25, len, s * 0.07, rail);
-    for k in 0..4 {
-        let along = -len / 2.0 + len * (k as f32 + 0.1) / 4.0;
-        rect(along, -s * 0.26, len * 0.2, s * 0.52, fade(DOOR_WOOD));
+    let r = s * 0.42 * (1.0 - sink * 0.5);
+    let pad = Color::new(0.3, 0.68, 0.25, 1.0);
+    draw_circle(c.x, c.y + s * 0.03, r, fade(darker(pad, 0.65)));
+    draw_circle(c.x, c.y, r, fade(pad));
+    draw_circle(c.x, c.y, r * 0.8, fade(mix(pad, WHITE, 0.12)));
+    // The notch: a wedge of water cut in from the edge.
+    let a = if upright { -PI / 2.0 } else { 0.0 } + PI / 4.0;
+    let tip = |t: f32| c + vec2(t.cos(), t.sin()) * (r + 1.0);
+    draw_triangle(c, tip(a - 0.3), tip(a + 0.3), fade(WATER));
+    // Veins out from the middle.
+    for k in 0..6 {
+        let t = a + PI / 3.0 * (k as f32 + 0.5);
+        let end = c + vec2(t.cos(), t.sin()) * r * 0.75;
+        draw_line(c.x, c.y, end.x, end.y, s * 0.02, fade(darker(pad, 0.8)));
     }
+    // A little pink flower.
+    let f = c + vec2(-r * 0.3, r * 0.25);
+    for k in 0..5 {
+        let t = PI * 2.0 * k as f32 / 5.0;
+        let p = f + vec2(t.cos(), t.sin()) * s * 0.05;
+        draw_circle(p.x, p.y, s * 0.045, fade(Color::new(1.0, 0.6, 0.8, 1.0)));
+    }
+    draw_circle(f.x, f.y, s * 0.03, fade(GOLD));
 }
 
-/// Is the bridge at `(x, y)` crossed up and down: is there land above or
+/// Is the lily pad at `(x, y)` crossed up and down: is there land above or
 /// below it (and none to the sides)? `land` says if there's land at a spot.
 pub fn upright_bridge(land: impl Fn(i32, i32) -> bool, x: i32, y: i32) -> bool {
     let sides = land(x - 1, y) || land(x + 1, y);
@@ -3378,7 +3383,7 @@ impl Game {
             (Mode::Chopping, Some(Event::Chopped(p))) => Some(p),
             _ => None,
         };
-        // A bridge turns to match the land it joins. (The level's own map
+        // A lily pad turns to match the land it joins. (The level's own map
         // says, as one that's falling in is already water.)
         let start = l.world();
         let land = |x, y| {
@@ -3419,7 +3424,7 @@ impl Game {
                     Some(Tile::Door) => draw_door(c, cell, 0.0),
                     Some(Tile::Open) => draw_door(c, cell, self.door_open((x, y))),
                     Some(Tile::Bridge) => draw_bridge(c, cell, 0.0, upright(x, y)),
-                    // The bridge the robot is stepping off, falling in.
+                    // The lily pad the robot is stepping off, sinking.
                     Some(Tile::Water) if falling == Some((x, y)) => {
                         let sink = (self.timer / self.move_time()).min(1.0);
                         draw_bridge(c, cell, sink, upright(x, y));

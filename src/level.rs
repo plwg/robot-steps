@@ -57,8 +57,9 @@ pub enum Tile {
     Rain(u8),
     /// A river or pond: the robot can't go in.
     Water,
-    /// A wooden bridge over the water. It holds the robot once: when the
-    /// robot steps off, it falls in, and there's only water left.
+    /// A lily pad on the water (`Bridge` from when it was drawn as one). It
+    /// holds the robot once: when the robot steps off, it sinks, and there's
+    /// only water left.
     Bridge,
 }
 
@@ -869,20 +870,20 @@ pub const CHAPTERS: &[Chapter] = &[
             level("72", &["*D~~~R", "@@@@@~", "k~~~~~"]),
         ],
     },
-    // A bridge holds the robot once: step off, and it falls in. No going
-    // back the same way, so plan the way round.
+    // A lily pad holds the robot once: step off, and it sinks. No going back
+    // the same way, so plan the way round.
     Chapter {
-        name: "Bridges",
+        name: "Lily pads",
         levels: &[
             level("d-bridge", &["www", "R=*", "www"]).demo("R R"),
             // Hop from island to island.
             level("bridge-hop", &["wwwwwww", "R=*=*=*", "wwwwwww"]),
-            // Over for the key, then back over the other bridge for the door.
+            // Over for the key, then back over the other lily pad for the door.
             level("bridge-key", &["R.=.k", "..w..", "..=..", "D@w@@", "*@w@@"]),
-            // The island with one bridge has to come last: the other one
-            // has a bridge in and a bridge out.
+            // The island with one lily pad has to come last: the other one
+            // has a pad in and a pad out.
             level("bridge-order", &["R.....", "=ww=w=", "*ww*.."]),
-            // A fallen bridge is water: the next slide stops before it.
+            // A sunk lily pad is water: the next slide stops before it.
             level("bridge-ice", &["R~~=~~.", "@@@@*@@"]),
         ],
     },
