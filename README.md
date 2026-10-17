@@ -66,9 +66,10 @@ introduces, in the order programming is usually taught:
 Throughout, a **slider** along the top runs the program ahead of time, while
 it's being built: drag it to see where the robot would be just before any
 step, with the block about to run lifted up, the rain clouds counting, and
-one way the mystery clouds could turn out (play picks again). The end of the
-slider shows how it would finish: a star, a red cross or rain. Play always
-runs from the start.
+one way the mystery clouds could turn out. A star along it marks each step
+that picks one up, and the end shows how it would finish: a star, a red
+cross or rain. Play always runs from the start, picks the mystery clouds
+again, and the slider follows that run (and still shows it afterwards).
 
 Throughout, **debugging**: when the robot bumps into something, the step
 that went wrong shakes red, and the program stays put to be fixed. Tapping a

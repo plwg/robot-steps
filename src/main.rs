@@ -1329,6 +1329,11 @@ impl Game {
         {
             return;
         }
+        self.resimulate();
+    }
+
+    /// Work the simulation out again, in the world `preview` makes.
+    fn resimulate(&mut self) {
         let at_end = self
             .sim
             .as_ref()
@@ -1512,12 +1517,23 @@ impl Game {
             let c = vec2(x_at(k as f32 + 0.5), r.y);
             draw_circle(c.x, c.y, 6.0, colour);
         }
-        // How it ends, at the far end (while building).
-        if self.mode == Mode::Edit
-            && let Some((_, sim)) = &self.sim
+        if let Some((_, sim)) = &self.sim
+            && sim.trace.len() == steps.len()
         {
+            // A star over each step that collects one (but the last, which
+            // the star at the end stands for).
+            let end = Self::sim_end(sim);
+            for k in 0..steps.len() {
+                let (before, after) = (&sim.worlds[k], &sim.worlds[k + 1]);
+                let won = matches!(end, SimEnd::Won) && k + 1 == steps.len();
+                if after.stars.len() < before.stars.len() && !won {
+                    let c = vec2(x_at(k as f32 + 0.5), r.y);
+                    draw_star(c, 12.0, 0.0, STAR);
+                }
+            }
+            // How it ends, at the far end.
             let c = vec2(r.right() + 22.0, r.y);
-            match Self::sim_end(sim) {
+            match end {
                 SimEnd::Won => draw_star(c, 16.0, 0.0, STAR),
                 SimEnd::Stuck => draw_answer(c, false),
                 SimEnd::Wet => draw_rain_cloud(
@@ -1939,18 +1955,25 @@ impl Game {
 
     /// Reveal what's under the mystery clouds (different every time), then go.
     fn start_run(&mut self) {
+        // Play picks the mystery clouds again, and the slider follows it, so
+        // it shows the run that's happening (and still does afterwards).
+        let mysteries = self.level().mysteries.clone();
+        if mysteries.is_empty() {
+            self.refresh_sim();
+        } else {
+            self.preview = self.level().random_outcome(|| gen_range(0, 2) == 1);
+            self.resimulate();
+        }
         // Always from the start, whatever the slider shows.
         self.world = self.level().world();
         self.facing = Dir::Right;
         self.failed_step = None;
-        let mysteries = self.level().mysteries.clone();
         if mysteries.is_empty() {
             self.trace = level::expand(&self.strips, &self.world);
             self.act();
             return;
         }
-        let outcome = self.level().random_outcome(|| gen_range(0, 2) == 1);
-        self.world = self.level().revealed(&outcome);
+        self.world = self.level().revealed(&self.preview);
         // A program runs the same way every time in the same world, so the
         // whole run can be worked out now that the clouds are gone.
         self.trace = level::expand(&self.strips, &self.world);
