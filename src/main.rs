@@ -1951,6 +1951,7 @@ impl Game {
                 self.crossed_out() && self.choices().contains(&sense) && sense != Sense::True
             }
             Button::Break => self.level().breaks,
+            Button::Close => self.ending(),
             Button::Not => self.picking() && self.not_offered() && !self.crossed_out(),
             Button::Else => self.level().otherwise,
             Button::While => self.level().whiles,
