@@ -136,15 +136,16 @@ change its width and height and how many slots the program (and each
 function) has.
 
 The buttons under the tiles choose the blocks it allows: the axe, sleep,
-repeat, loops, "while", "if", "else", "not", the two functions and numbers
-for them, and break. Some bring others along, as in the game's own levels:
-loops need repeat; "while" and functions need loops; "else" and "not" need
-an "if"; numbers need a function; and break needs a loop and an "if".
-Mystery clouds always come with "if"
-and the axe, and rain clouds with sleep. The "if" and "while" can look for
-anything painted on the map, grass, and the edge, and "while" always has
-"not" too ("while there's *no* tree"), and "true"; the "if" has "not" with
-the "not" button.
+repeat, loops, "while", "if", the two functions and numbers for them, and
+break. Tapping "if" (or "while") turns it on and shows its options where the
+tiles were: what it can look for (a tree, rock, star, ice, key, door, grass,
+the edge, or "true", each on or off), whether it can be "not" ("if there's
+*no* tree"), and for the "if", whether there's an "else". The × goes back to
+the tiles, and tapping the block again while its options show turns it off.
+Some blocks bring others along, as in the game's own levels: loops need
+repeat; "while" and functions need loops; numbers need a function; and break
+needs a loop and an "if". Mystery clouds always come with "if" (looking for
+a tree, at least) and the axe, and rain clouds with sleep.
 
 Press play to try the map out. The arrow at the top left goes back to
 everyone's maps, where a map can be played, changed with the pencil, or

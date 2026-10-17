@@ -12,7 +12,7 @@ use crate::{
     Screen, W, darker, dir_color, draw_answer, draw_arrow, draw_axe_badge, draw_bracket,
     draw_break_icon, draw_bridge, draw_door, draw_ice, draw_key, draw_label, draw_loop_icon,
     draw_mystery, draw_no_sign, draw_number_icon, draw_play_icon, draw_question, draw_rain_cloud,
-    draw_rain_timeline, draw_robot, draw_rock, draw_shape, draw_sleep_icon, draw_star,
+    draw_rain_timeline, draw_robot, draw_rock, draw_sense, draw_shape, draw_sleep_icon, draw_star,
     draw_trash_icon, draw_tree, draw_water, draw_while_icon, mix, progress, rounded_rect,
     upright_bridge,
 };
@@ -30,6 +30,8 @@ pub struct Maker {
     delete_armed: Option<(usize, f32)>,
     /// Which page of maps the maps screen shows.
     page: usize,
+    /// The "if" or "while" whose options show in place of the tiles.
+    options: Option<Tool>,
 }
 
 impl Maker {
@@ -40,6 +42,7 @@ impl Maker {
             painted: None,
             delete_armed: None,
             page: 0,
+            options: None,
         }
     }
 }
@@ -65,6 +68,11 @@ const BOARD: Rect = Rect {
 enum Control {
     Paint(char),
     Tool(Tool),
+    /// In an "if" or "while"'s options: something it can look for, "not"
+    /// or "else" (on or off), and closing them to get back to the tiles.
+    Look(Sense),
+    Switch(Tool),
+    Close,
     /// Make something (width, height, slots, function slots) one less or
     /// one more.
     Less(Setting),
@@ -156,6 +164,7 @@ impl Game {
     fn open_maker(&mut self, i: usize) {
         self.sfx(Sfx::Tap);
         self.maker.map = i;
+        self.maker.options = None;
         self.maker.painted = None;
         self.screen = Screen::Maker;
     }
@@ -371,15 +380,35 @@ impl Game {
     /// Every editor button, with its centre and half-size.
     fn controls(&self) -> Vec<(Control, Vec2, f32)> {
         let mut out = Vec::new();
-        for (i, &p) in custom::PAINTS.iter().enumerate() {
+        // The tiles to paint, four to a row, or an "if" or "while"'s options
+        // in their place: what it looks for, "not", "else", and close.
+        let place = |i: usize| {
             let (col, row) = ((i % 4) as f32, (i / 4) as f32);
-            out.push((
-                Control::Paint(p),
-                vec2(1256.0 + (col - 1.5) * 70.0, 128.0 + row * 82.0),
-                31.0,
-            ));
+            vec2(1256.0 + (col - 1.5) * 70.0, 128.0 + row * 82.0)
+        };
+        match self.options() {
+            Some(tool) => {
+                for (i, &sense) in custom::CONDITIONS.iter().enumerate() {
+                    out.push((Control::Look(sense), place(i), 31.0));
+                }
+                let not = if tool == Tool::If {
+                    Tool::Not
+                } else {
+                    Tool::WhileNot
+                };
+                out.push((Control::Switch(not), place(9), 31.0));
+                if tool == Tool::If {
+                    out.push((Control::Switch(Tool::Else), place(10), 31.0));
+                }
+                out.push((Control::Close, place(11), 31.0));
+            }
+            None => {
+                for (i, &p) in custom::PAINTS.iter().enumerate() {
+                    out.push((Control::Paint(p), place(i), 31.0));
+                }
+            }
         }
-        for (i, &t) in Tool::ALL.iter().enumerate() {
+        for (i, &t) in Tool::MAIN.iter().enumerate() {
             let (col, row) = ((i % 6) as f32, (i / 6) as f32);
             out.push((
                 Control::Tool(t),
@@ -397,6 +426,11 @@ impl Game {
         }
         out.push((Control::Play, vec2(1256.0, 680.0), 60.0));
         out
+    }
+
+    /// The "if" or "while" whose options are showing, while it's on.
+    fn options(&self) -> Option<Tool> {
+        self.maker.options.filter(|&t| self.map().has(t))
     }
 
     fn setting(&self, s: Setting) -> usize {
@@ -437,7 +471,26 @@ impl Game {
         };
         match control {
             Control::Paint(p) => self.maker.paint = p,
+            // Tapping "if" or "while" turns it on and shows its options;
+            // tapped again with them showing, it's turned off.
+            Control::Tool(t @ (Tool::If | Tool::While)) => {
+                if self.options() == Some(t) {
+                    self.map_mut().toggle(t);
+                    self.maker.options = None;
+                } else {
+                    if !self.map().has(t) {
+                        self.map_mut().toggle(t);
+                    }
+                    self.maker.options = Some(t);
+                }
+            }
             Control::Tool(t) => self.map_mut().toggle(t),
+            Control::Look(sense) => {
+                let tool = self.options().unwrap_or(Tool::If);
+                self.map_mut().toggle_look(tool, sense);
+            }
+            Control::Switch(t) => self.map_mut().toggle(t),
+            Control::Close => self.maker.options = None,
             Control::Less(s) => self.change(s, -1),
             Control::More(s) => self.change(s, 1),
             Control::Play if self.map().playable() => {
@@ -530,9 +583,46 @@ impl Game {
                     rounded_rect(c.x - half, c.y - half, half * 2.0, half * 2.0, 14.0, GRASS);
                     draw_tile(p, c, half * 2.0, self.time, self.paint());
                 }
+                Control::Look(sense) => {
+                    let tool = self.options().unwrap_or(Tool::If);
+                    let on = map.looks(tool).contains(&sense);
+                    let colour = if on { GRASS } else { DISABLED };
+                    rounded_rect(c.x - half, c.y - half, half * 2.0, half * 2.0, 14.0, colour);
+                    draw_sense(c, half * 1.9, sense);
+                    if !on {
+                        let fog = Color::new(0.85, 0.87, 0.9, 0.45);
+                        rounded_rect(c.x - half, c.y - half, half * 2.0, half * 2.0, 14.0, fog);
+                    }
+                }
+                Control::Switch(t) => {
+                    let colour = if map.has(t) { IF_LIME } else { DISABLED };
+                    rounded_rect(c.x - half, c.y - half, half * 2.0, half * 2.0, 14.0, colour);
+                    match t {
+                        Tool::Else => draw_answer(c, false),
+                        _ => draw_no_sign(c, half * 0.6),
+                    }
+                }
+                Control::Close => {
+                    rounded_rect(c.x - half, c.y - half, half * 2.0, half * 2.0, 14.0, INK);
+                    let k = half * 0.4;
+                    draw_line(c.x - k, c.y - k, c.x + k, c.y + k, 6.0, WHITE);
+                    draw_line(c.x - k, c.y + k, c.x + k, c.y - k, 6.0, WHITE);
+                }
                 Control::Tool(t) => {
                     let on = map.has(t);
                     let colour = if on { tool_colour(t) } else { DISABLED };
+                    // The one whose options are showing glows.
+                    if self.options() == Some(t) {
+                        let g = 6.0 + ((self.time * 6.0).sin() * 0.5 + 0.5) * 3.0;
+                        rounded_rect(
+                            c.x - half - g,
+                            c.y - half - g,
+                            2.0 * (half + g),
+                            2.0 * (half + g) + 5.0,
+                            14.0 + g,
+                            STAR,
+                        );
+                    }
                     rounded_rect(
                         c.x - half,
                         c.y - half + 5.0,
@@ -640,7 +730,7 @@ fn tool_colour(tool: Tool) -> Color {
     match tool {
         Tool::Axe => AXE_BROWN,
         Tool::Sleep => SLEEP_SLATE,
-        Tool::Repeat | Tool::Loops | Tool::While => REPEAT_TEAL,
+        Tool::Repeat | Tool::Loops | Tool::While | Tool::WhileNot => REPEAT_TEAL,
         Tool::If | Tool::Else | Tool::Not => IF_LIME,
         Tool::Fn1 | Tool::Fn2 | Tool::Numbers => CALL_INK,
         Tool::Break => BREAK_PLUM,
@@ -666,7 +756,7 @@ fn draw_tool_icon(tool: Tool, c: Vec2, half: f32) {
         Tool::Fn2 => draw_shape(c, half * 0.55, 2),
         Tool::Numbers => draw_number_icon(c, half, 1),
         Tool::Sleep => draw_sleep_icon(c, size, WHITE),
-        Tool::Not => draw_no_sign(c, half * 0.6),
+        Tool::Not | Tool::WhileNot => draw_no_sign(c, half * 0.6),
     }
 }
 

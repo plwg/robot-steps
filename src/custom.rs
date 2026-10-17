@@ -15,6 +15,20 @@ const MAX_ROW_SLOTS: usize = 11;
 /// as `3`; tapping one again counts it down to 2, then 1, then 3 again.
 pub const PAINTS: [char; 12] = ['.', '#', '@', '~', 'w', '=', '?', 'k', 'D', '3', '*', 'R'];
 
+/// What an "if" or a "while" can be set to look for, in the order they're
+/// shown: anything that can be painted, grass, the edge, and "true".
+pub const CONDITIONS: [Sense; 9] = [
+    Sense::Tree,
+    Sense::Rock,
+    Sense::Star,
+    Sense::Ice,
+    Sense::Key,
+    Sense::Door,
+    Sense::Grass,
+    Sense::Edge,
+    Sense::True,
+];
+
 /// Can a map's cell hold `c`: something painted, or a rain cloud at any
 /// count?
 fn paintable(c: char) -> bool {
@@ -32,7 +46,9 @@ pub enum Tool {
     Loops,
     /// "While" (saved as "until", its old name).
     While,
-    /// The "if" block. It can look for anything on the map, or the edge.
+    /// "Not", for the "while": "while there's no...".
+    WhileNot,
+    /// The "if" block, looking for whichever conditions are picked.
     If,
     Else,
     /// "Not", for the "if": "if there's no...".
@@ -47,17 +63,32 @@ pub enum Tool {
 }
 
 impl Tool {
-    /// In the order they're shown, and saved: each comes after the blocks it
-    /// needs.
-    pub const ALL: [Tool; 12] = [
+    /// In the order they're saved: each comes after the blocks it needs.
+    pub const ALL: [Tool; 13] = [
+        Tool::Axe,
+        Tool::Sleep,
+        Tool::Repeat,
+        Tool::Loops,
+        Tool::While,
+        Tool::WhileNot,
+        Tool::If,
+        Tool::Else,
+        Tool::Not,
+        Tool::Fn1,
+        Tool::Fn2,
+        Tool::Numbers,
+        Tool::Break,
+    ];
+
+    /// The ones with a button of their own, in order. "Not" and "else" are
+    /// set with what "if" and "while" look for.
+    pub const MAIN: [Tool; 10] = [
         Tool::Axe,
         Tool::Sleep,
         Tool::Repeat,
         Tool::Loops,
         Tool::While,
         Tool::If,
-        Tool::Else,
-        Tool::Not,
         Tool::Fn1,
         Tool::Fn2,
         Tool::Numbers,
@@ -70,6 +101,7 @@ impl Tool {
             Tool::Repeat => "repeat",
             Tool::Loops => "loops",
             Tool::While => "until",
+            Tool::WhileNot => "whilenot",
             Tool::Else => "else",
             Tool::Numbers => "numbers",
             Tool::Sleep => "wait",
@@ -102,6 +134,10 @@ pub struct CustomMap {
     sleep: bool,
     not: bool,
     breaks: bool,
+    while_not: bool,
+    /// What the "if" and the "while" can look for.
+    if_looks: Vec<Sense>,
+    while_looks: Vec<Sense>,
 }
 
 impl CustomMap {
@@ -124,6 +160,9 @@ impl CustomMap {
             sleep: false,
             not: false,
             breaks: false,
+            while_not: false,
+            if_looks: Vec::new(),
+            while_looks: Vec::new(),
         };
         map.paint(0, 1, 'R');
         map.paint(5, 2, '*');
@@ -187,7 +226,53 @@ impl CustomMap {
             Tool::Sleep => self.sleep,
             Tool::Not => self.not,
             Tool::Break => self.breaks,
+            Tool::WhileNot => self.while_not,
         }
+    }
+
+    /// What the "if" (or the "while") can look for.
+    pub fn looks(&self, tool: Tool) -> &[Sense] {
+        match tool {
+            Tool::While => &self.while_looks,
+            _ => &self.if_looks,
+        }
+    }
+
+    /// Let the "if" (or the "while") look for `sense`, or stop it. There's
+    /// always at least one thing to look for.
+    pub fn toggle_look(&mut self, tool: Tool, sense: Sense) {
+        let looks = match tool {
+            Tool::While => &mut self.while_looks,
+            _ => &mut self.if_looks,
+        };
+        if looks.contains(&sense) {
+            if looks.len() > 1 {
+                looks.retain(|&s| s != sense);
+            }
+        } else {
+            looks.push(sense);
+            looks.sort_by_key(|s| CONDITIONS.iter().position(|c| c == s));
+        }
+    }
+
+    /// What a newly turned-on "if" (or "while") looks for: anything on the
+    /// map (a cloud might be a tree), a star, grass and the edge, and for a
+    /// "while", "true".
+    fn usual_looks(&self, with_true: bool) -> Vec<Sense> {
+        let on_map = |c: char| self.cells.contains(&c);
+        CONDITIONS
+            .into_iter()
+            .filter(|s| match s {
+                Sense::Tree => on_map('#') || on_map('?'),
+                Sense::Rock => on_map('@'),
+                Sense::Ice => on_map('~'),
+                Sense::Key => on_map('k'),
+                Sense::Door => on_map('D'),
+                Sense::Star | Sense::Grass | Sense::Edge => true,
+                Sense::True => with_true,
+                Sense::Wall => false,
+            })
+            .collect()
     }
 
     pub fn functions(&self) -> usize {
@@ -200,6 +285,7 @@ impl CustomMap {
     /// first, "else" needs an "if", numbers need a function, and a break
     /// needs a loop and an "if" (to decide when).
     pub fn toggle(&mut self, tool: Tool) {
+        let (had_if, had_while) = (self.ifs, self.whiles);
         let on = !self.has(tool);
         match tool {
             Tool::Axe => self.axe = on,
@@ -214,8 +300,10 @@ impl CustomMap {
             Tool::Sleep => self.sleep = on,
             Tool::Not => self.not = on,
             Tool::Break => self.breaks = on,
+            Tool::WhileNot => self.while_not = on,
         }
         if on {
+            self.whiles |= self.while_not;
             self.ifs |= self.otherwise || self.not || self.breaks;
             self.loops |= self.breaks;
             if self.numbers && self.functions == 0 {
@@ -232,7 +320,14 @@ impl CustomMap {
         self.breaks &= self.ifs;
         self.otherwise &= self.ifs;
         self.not &= self.ifs;
+        self.while_not &= self.whiles;
         self.numbers &= self.functions > 0;
+        if self.ifs && !had_if {
+            self.if_looks = self.usual_looks(false);
+        }
+        if self.whiles && !had_while {
+            self.while_looks = self.usual_looks(true);
+        }
         // Make the main program fit on one row next to the functions.
         self.set_slots(self.slots, false);
     }
@@ -250,8 +345,7 @@ impl CustomMap {
     }
 
     /// The map as a level to play. Mystery clouds come with the "if" block
-    /// and the axe, to look before chopping. The "if" can look for anything
-    /// on the map (a cloud might be a tree), grass, and the edge.
+    /// (looking for a tree, at least) and the axe, to look before chopping.
     pub fn to_level(&self) -> Level {
         let mut level = Level::from_rows(&self.rows());
         let clouds = self.cells.contains(&'?');
@@ -261,40 +355,20 @@ impl CustomMap {
         level.repeat = self.repeat;
         level.loops = self.loops;
         if self.ifs || clouds {
-            let on_map = |c: char| self.cells.contains(&c);
-            level.ifs = Sense::ALL
-                .into_iter()
-                .filter(|s| match s {
-                    Sense::Tree => on_map('#') || clouds,
-                    Sense::Rock => on_map('@'),
-                    Sense::Ice => on_map('~'),
-                    Sense::Key => on_map('k'),
-                    Sense::Door => on_map('D'),
-                    Sense::Star | Sense::Grass | Sense::Edge => true,
-                    Sense::Wall | Sense::True => false,
-                })
-                .collect();
+            level.ifs = match self.ifs {
+                true => self.if_looks.clone(),
+                false => self.usual_looks(false),
+            };
+            if clouds && !level.ifs.contains(&Sense::Tree) {
+                level.ifs.insert(0, Sense::Tree);
+            }
         }
         level.whiles = self.whiles;
-        // "While" always has "not" here: "while there's no tree".
-        level.while_not = self.whiles;
-        level.breaks = self.breaks;
-        // "While" can look for whatever an "if" could.
         if self.whiles {
-            let on_map = |c: char| self.cells.contains(&c);
-            level.while_looks = Sense::ALL
-                .into_iter()
-                .filter(|s| match s {
-                    Sense::Tree => on_map('#') || clouds,
-                    Sense::Rock => on_map('@'),
-                    Sense::Ice => on_map('~'),
-                    Sense::Key => on_map('k'),
-                    Sense::Door => on_map('D'),
-                    Sense::Star | Sense::Grass | Sense::Edge => true,
-                    Sense::Wall | Sense::True => false,
-                })
-                .collect();
+            level.while_looks = self.while_looks.clone();
         }
+        level.while_not = self.while_not;
+        level.breaks = self.breaks;
         level.otherwise = self.otherwise;
         level.functions = self.functions;
         level.numbers = self.numbers;
@@ -313,6 +387,12 @@ pub fn format(maps: &[CustomMap]) -> String {
             if m.has(tool) {
                 out += " ";
                 out += tool.name();
+            }
+        }
+        for (tool, name) in [(Tool::If, "iflooks"), (Tool::While, "whilelooks")] {
+            if m.has(tool) {
+                let letters: String = m.looks(tool).iter().map(|s| s.letter()).collect();
+                out += &format!(" {name}={letters}");
             }
         }
         out += "\n";
@@ -357,6 +437,21 @@ pub fn parse(text: &str) -> Vec<CustomMap> {
             match word.split_once('=') {
                 Some(("slots", n)) => slots.0 = n.parse().unwrap_or(slots.0),
                 Some(("fn_slots", n)) => slots.1 = n.parse().unwrap_or(slots.1),
+                Some((name @ ("iflooks" | "whilelooks"), letters)) => {
+                    let looks: Vec<Sense> =
+                        letters.chars().filter_map(Sense::with_letter).collect();
+                    let tool = if name == "iflooks" {
+                        Tool::If
+                    } else {
+                        Tool::While
+                    };
+                    if map.has(tool) && !looks.is_empty() {
+                        match tool {
+                            Tool::If => map.if_looks = looks,
+                            _ => map.while_looks = looks,
+                        }
+                    }
+                }
                 _ => {
                     // Maps saved before there was one "if" block.
                     let word = match word {
@@ -403,9 +498,9 @@ mod tests {
     #[test]
     fn if_looks_for_what_is_on_the_map() {
         let mut m = CustomMap::new();
-        m.toggle(Tool::If);
         m.paint(1, 1, '@');
         m.paint(2, 1, '~');
+        m.toggle(Tool::If);
         let ifs = m.to_level().ifs;
         assert_eq!(
             ifs,
@@ -486,9 +581,34 @@ mod tests {
         assert_eq!(maps, [m.clone()]);
         let level = m.to_level();
         assert!(level.whiles && level.otherwise && level.numbers && !level.ifs.is_empty());
-        // "While" picks what to look for, and can be "while there's no...",
-        // with or without "not" for the "if".
-        assert!(level.while_looks.len() > 1 && level.while_not && !level.not);
+        // "While" picks what to look for, "true" too.
+        assert!(level.while_looks.contains(&Sense::True) && !level.while_not);
+    }
+
+    #[test]
+    fn what_if_and_while_look_for_is_picked_and_kept() {
+        let mut m = CustomMap::new();
+        m.toggle(Tool::If);
+        m.toggle(Tool::While);
+        m.toggle_look(Tool::If, Sense::True);
+        m.toggle_look(Tool::If, Sense::Star);
+        m.toggle_look(Tool::While, Sense::Grass);
+        m.toggle(Tool::WhileNot);
+        assert_eq!(m.looks(Tool::If), [Sense::Grass, Sense::Edge, Sense::True]);
+        let maps = parse(&format(std::slice::from_ref(&m)));
+        assert_eq!(maps, [m.clone()]);
+        let level = m.to_level();
+        assert_eq!(level.while_looks, [Sense::Star, Sense::Edge, Sense::True]);
+        assert!(level.while_not && !level.not, "each has its own not");
+        // There's always something to look for.
+        for sense in [Sense::Grass, Sense::Edge, Sense::True] {
+            m.toggle_look(Tool::If, sense);
+        }
+        assert_eq!(m.looks(Tool::If), [Sense::True]);
+        // "Not" for the "while" brings the "while".
+        let mut m = CustomMap::new();
+        m.toggle(Tool::WhileNot);
+        assert!(m.has(Tool::While) && m.has(Tool::Loops));
     }
 
     #[test]

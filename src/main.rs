@@ -1843,9 +1843,7 @@ impl Game {
     }
 
     fn while_choices(level: &Level) -> Vec<Sense> {
-        let mut senses = level.while_looks.clone();
-        senses.push(Sense::True);
-        senses
+        level.while_looks.clone()
     }
 
     /// Can what's being picked be "there's *no*..."?
@@ -1854,6 +1852,16 @@ impl Game {
             Some(Button::While) => self.level().while_not,
             _ => self.level().not,
         }
+    }
+
+    fn start_if_true(&mut self) {
+        self.armed = None;
+        self.if_not = false;
+        self.insert(Item::IfStart {
+            sense: Sense::True,
+            dir: Dir::Right,
+            not: false,
+        });
     }
 
     /// Is there a loop open where the next block goes, for a break to leave?
@@ -2002,6 +2010,8 @@ impl Game {
                 }));
             }
             Button::Sense(sense) if self.armed == Some(Button::While) => self.pick_while(sense),
+            // "If true" looks no way in particular: it starts straight away.
+            Button::Sense(Sense::True) => self.start_if_true(),
             Button::Sense(_) => self.armed = Some(button),
             Button::Not => self.if_not = !self.if_not,
             Button::Repeat => self.set_times(self.next_times()),
@@ -2031,7 +2041,10 @@ impl Game {
                     self.armed = Some(match self.level().ifs[..] {
                         [only] if !self.level().not => Button::Sense(only),
                         _ => Button::If,
-                    })
+                    });
+                    if self.armed == Some(Button::Sense(Sense::True)) {
+                        self.start_if_true();
+                    }
                 }
             },
             // Like a loop, but tap it then pick which way to look.
@@ -4334,7 +4347,7 @@ fn pair_ends(items: &[Item], i: usize) -> Option<(usize, Option<usize>)> {
 }
 
 /// What an "if" looks for: a little tree or star.
-fn draw_sense(c: Vec2, size: f32, sense: Sense) {
+pub fn draw_sense(c: Vec2, size: f32, sense: Sense) {
     match sense {
         Sense::Tree => draw_tree(c - vec2(0.0, size * 0.12), size, 1.0, 0.0),
         Sense::Star => draw_star(c, size * 0.42, 0.0, STAR),
@@ -4441,6 +4454,12 @@ fn draw_count(n: u8, c: Vec2, strip: usize) {
 /// "If there's a tree (or star) that way": the thing, an arrow, and a "?".
 /// With `not`, the thing is crossed out: "if there's no tree".
 fn draw_if_icon(c: Vec2, size: f32, sense: Sense, dir: Dir, not: bool) {
+    // "If true": the tick and the "?", looking no way.
+    if sense == Sense::True {
+        draw_sense(c - vec2(size * 0.12, -size * 0.06), size * 0.62, sense);
+        draw_question(c + vec2(size * 0.24, -size * 0.22), size * 0.36, WHITE);
+        return;
+    }
     let at = c - vec2(size * 0.16, size * 0.02);
     draw_sense(at, size * 0.55, sense);
     if not {

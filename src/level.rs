@@ -169,15 +169,19 @@ impl Sense {
 
     /// The sense with this letter in program text.
     fn from_letter(letter: char) -> Sense {
-        *Sense::ALL
-            .iter()
-            .chain([&Sense::Wall, &Sense::True])
-            .find(|s| s.letter() == letter)
-            .expect("bad sense")
+        Sense::with_letter(letter).expect("bad sense")
     }
 
-    /// Its letter after `{` in program text.
-    fn letter(self) -> char {
+    /// The sense with this letter, if there is one.
+    pub fn with_letter(letter: char) -> Option<Sense> {
+        Sense::ALL
+            .into_iter()
+            .chain([Sense::Wall, Sense::True])
+            .find(|s| s.letter() == letter)
+    }
+
+    /// Its letter after `{` in program text (and in saved maps).
+    pub fn letter(self) -> char {
         match self {
             Sense::Tree => 't',
             Sense::Rock => 'r',
@@ -1363,6 +1367,10 @@ impl Level {
         level.ifs = def.ifs.to_vec();
         level.whiles = def.whiles;
         level.while_looks = def.while_looks.to_vec();
+        // Every "while" in the game's own levels can be "while true".
+        if def.whiles {
+            level.while_looks.push(Sense::True);
+        }
         level.breaks = def.breaks;
         level.otherwise = def.otherwise;
         level.not = def.not;
