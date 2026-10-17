@@ -1507,7 +1507,35 @@ impl Game {
             10.0,
             Color::new(1.0, 1.0, 1.0, 1.0),
         );
-        // A dot for each step, in its block's colour.
+        // The simulation of this same run, if there is one.
+        let sim = self
+            .sim
+            .as_ref()
+            .map(|(_, sim)| sim)
+            .filter(|sim| sim.trace.len() == steps.len());
+        // The rain: the steps that end with it raining turn the track blue.
+        if let Some(sim) = sim {
+            for k in 0..steps.len() {
+                if sim.worlds[k + 1].raining() {
+                    let (a, b) = (x_at(k as f32), x_at(k as f32 + 1.0));
+                    draw_line(
+                        a,
+                        r.y,
+                        b,
+                        r.y,
+                        14.0,
+                        Color {
+                            a: 0.55,
+                            ..RAIN_BLUE
+                        },
+                    );
+                }
+            }
+        }
+        // A dot for each step, in its block's colour, smaller when there are
+        // a lot of them so they don't run into each other.
+        let gap = r.w / n;
+        let dot = (gap * 0.4).clamp(2.0, 6.0);
         for (k, e) in steps.iter().enumerate() {
             let colour = match e.step {
                 Step::Do(cmd) => Self::block_colour(cmd),
@@ -1515,21 +1543,30 @@ impl Game {
                 Step::Forever => STOP_RED,
             };
             let c = vec2(x_at(k as f32 + 0.5), r.y);
-            draw_circle(c.x, c.y, 6.0, colour);
+            draw_circle(c.x, c.y, dot, colour);
         }
-        if let Some((_, sim)) = &self.sim
-            && sim.trace.len() == steps.len()
-        {
+        if let Some(sim) = sim {
             // A star over each step that collects one (but the last, which
             // the star at the end stands for).
             let end = Self::sim_end(sim);
+            let last = steps.len() - 1;
             for k in 0..steps.len() {
                 let (before, after) = (&sim.worlds[k], &sim.worlds[k + 1]);
-                let won = matches!(end, SimEnd::Won) && k + 1 == steps.len();
+                let won = matches!(end, SimEnd::Won) && k == last;
                 if after.stars.len() < before.stars.len() && !won {
                     let c = vec2(x_at(k as f32 + 0.5), r.y);
-                    draw_star(c, 12.0, 0.0, STAR);
+                    draw_star(c, (gap * 0.9).clamp(6.0, 12.0), 0.0, STAR);
                 }
+            }
+            // A red cross on the step that bumps into something.
+            if matches!(end, SimEnd::Stuck) && matches!(steps[last].step, Step::Do(_)) {
+                let c = vec2(x_at(last as f32 + 0.5), r.y);
+                let size = (gap * 0.5).clamp(4.0, 8.0);
+                draw_circle(c.x, c.y, size + 2.0, WHITE);
+                draw_circle(c.x, c.y, size, STOP_RED);
+                let d = size * 0.45;
+                draw_line(c.x - d, c.y - d, c.x + d, c.y + d, 2.5, WHITE);
+                draw_line(c.x - d, c.y + d, c.x + d, c.y - d, 2.5, WHITE);
             }
             // How it ends, at the far end.
             let c = vec2(r.right() + 22.0, r.y);

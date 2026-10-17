@@ -1487,6 +1487,11 @@ impl World {
         })
     }
 
+    /// Is it raining from any of the clouds?
+    pub fn raining(&self) -> bool {
+        (0..self.h).any(|y| (0..self.w).any(|x| self.weather((x, y)).is_some_and(Weather::raining)))
+    }
+
     /// Is the robot getting rained on?
     pub fn wet(&self) -> bool {
         self.weather(self.pos).is_some_and(Weather::raining)
