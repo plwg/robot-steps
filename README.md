@@ -6,14 +6,42 @@ stars. There's no reading required.
 
 **[Play it in your browser](https://plwg.github.io/robot-steps/)**
 
-![The level map: finished levels are filled in with a star, and the next one pulses](docs/map.png)
+![The level map: each chapter is an island, finished levels are filled in with a star, and the next one pulses](docs/map.png)
 
 | Choose a player | Playing a level |
 |---|---|
-| ![Three players, each with their own robot and progress](docs/players.png) | ![Level 48: the main program calls the ● and ▲ functions, and the robot is partway through ▲, chopping a tree](docs/level.png) |
+| ![Three players, each with their own robot and progress](docs/players.png) | ![Level 14-6: the main program calls the ● and ▲ functions, and the robot is partway through ▲, chopping a tree](docs/level.png) |
+
+![Level 13-1: "while true { go right; if there's grass below { break } }", then down and back to the star. The robot is looking below, and the slider along the top shows the whole run](docs/break.png)
+
+## What it teaches
 
 Across 108 levels in 18 chapters, numbered within each chapter (`3-2`), it
-introduces, in the order programming is usually taught:
+introduces the ideas of programming in the order they're usually taught,
+each as something a robot on a map can do.
+
+| Programming idea | In the game | Chapter |
+|---|---|---|
+| A program is a sequence of steps | Arrow blocks, run in order from the left | 1 Moving |
+| Thinking ahead about state | Ice slides until something stops it; keys are carried and used up; a lily pad sinks once crossed | 2 Ice, 4 Keys and doors, 5 Lily pads |
+| Commands that change the world | The axe chops a tree down (and chopping nothing is an error) | 3 The axe |
+| Doing something n times | A count on a block: "go right ×3" | 6 Repeat |
+| Conditionals (`if`) | Mystery clouds turn out differently each run: "if there's a tree to the right { chop it }" | 7 If |
+| Loops (`for` n times) | Brackets round a group of blocks, with a count | 8 Loops |
+| Nesting | An "if" inside a loop: one rule for whatever comes | 9 If inside loops |
+| `if` / `else` | "Otherwise", after the grey ✗ | 10 Else |
+| Negation (`not`) | The red "no" sign: "if there's *no* tree" | 11 Not |
+| `while` loops | "While there's grass to the right { go right }", looking before each time round | 12 While |
+| `while true` and `break` | "While true" (a tick) goes round until a break leaves the loop | 13 Break |
+| Functions | Strips named ● and ▲ that the main program calls | 14 Functions, 15 Functions + if |
+| Parameters | Call ● with a number, and use "●'s number" as a count inside it | 16 Function numbers |
+| Timing | Rain clouds rain on a cycle: sleep, or hurry | 17 Rain |
+| Infinite loops | A "while" that would never end stops and shakes red | 12 While |
+| Tracing a program | The slider along the top runs it ahead of time, step by step | Throughout |
+| Debugging | The step that went wrong shakes red; blocks can be put in or taken out anywhere | Throughout |
+| Optimising | A trophy for the fewest blocks, and for the fewest turns | Throughout |
+
+## The chapters
 
 1. **Moving:** up, down, left and right, in order
 2. **Ice:** the robot slides until grass, a rock or the edge stops it, so it
@@ -23,36 +51,29 @@ introduces, in the order programming is usually taught:
 4. **Keys and doors:** a locked door needs a key, and each key opens one
    door. The robot remembers what it's carrying, so the order matters: fetch
    the key first, even when it's the other way
-5. **Bridges:** a bridge holds the robot once, then falls in the river
-   behind it. There's no going back the same way, so plan the way round
-   (and which island to leave till last)
+5. **Lily pads:** a lily pad holds the robot once, then sinks behind it.
+   There's no going back the same way, so plan the way round (and which
+   island to leave till last)
 6. **Repeat:** run one block several times when there aren't enough slots
 7. **If:** mystery clouds become a tree or grass each run (any way at all:
-   all trees, all grass, or a mix), so the robot has
-   to look before it chops: "if there's a tree to the right { chop it }". Tap
-   "if", pick what to look for (shown as map tiles: a tree, rock, star, ice,
-   key, door, grass, or the edge of the map, whichever the level offers),
-   then which way. The blocks to run go inside its brackets
+   all trees, all grass, or a mix), so the robot has to look before it
+   chops. Tap "if", pick what to look for (shown as map tiles: a tree, rock,
+   star, ice, key, door, grass, or the edge of the map, whichever the level
+   offers), then which way. The blocks to run go inside its brackets
 8. **Loops:** repeat a whole group of blocks
 9. **If inside loops:** "if there's a tree to the right { chop it }" or "if
    there's a star above { fetch it }" in a loop: one rule handles whatever
    the robot finds, wherever it finds it
 10. **Else:** "if there's a tree to the right { go down } otherwise { go
-   right }". The grey ✗ between the blocks marks where the "otherwise" part
-   starts
-11. **Not:** "if there's *no* tree above { fetch the star }". In the
-    "if" choices, the red "no" sign crosses out what to look for
+    right }"
+11. **Not:** "if there's *no* tree above { fetch the star }"
 12. **While:** "while there's grass to the right { go right }". Pick what to
-    look for, like an "if", then which way; the robot looks before each
-    time round. Mystery clouds decide how far it is, so no fixed number of
-    times would do. With "not": "while there's *no* tree below { go down }".
-    One that would go round for ever (back where it started, and still
-    going) stops and shakes red
-13. **Break:** leave a loop straight away, from inside an "if": "while true
-    { go right; if there's grass below { break } }". "While true" (a tick)
-    goes round for ever until a break, and a break leaves a counted loop
-    early too. These levels have no counts, so going the long way round
-    doesn't fit
+    look for, like an "if", then which way. The clouds decide how far it is,
+    so no fixed count would do. With "not": "while there's *no* tree below
+    { go down }"
+13. **Break:** "while true { go right; if there's grass below { break } }".
+    A break leaves a counted loop early too. These levels have no counts, so
+    going the long way round doesn't fit
 14. **Functions:** extra strips of blocks named with a shape (● and ▲) that
     the main program calls whenever it needs them
 15. **Functions + if:** "if" blocks inside functions
@@ -62,172 +83,74 @@ introduces, in the order programming is usually taught:
 17. **Rain:** rain clouds count down 3, 2, 1, rain for 2, then start again.
     A row under each cloud shows its whole cycle (a dot for each dry tick, a
     drop for each tick of rain, with the one it's on now ringed). Every
-    action takes a
-    tick, so sleep while it rains (the sleep block, Zzz, repeated like any
-    other) or hurry across before it starts. Being under a cloud when it
-    rains is getting wet, and the end of the run
+    action takes a tick, so sleep while it rains (the sleep block, Zzz) or
+    hurry across before it starts. Being under a cloud when it rains is
+    getting wet, and the end of the run
 18. **All together**
-
-Throughout, a **slider** along the top runs the program ahead of time, while
-it's being built: drag it to see where the robot would be just before any
-step, with the block about to run lifted up, the rain clouds counting, and
-one way the mystery clouds could turn out. A star along it marks each step
-that picks one up, a red cross the step that bumps into something, and blue
-the steps when it's raining; the end shows how it would finish: a star, a
-cross or rain. That sits where the run stops: if it stops before the end
-of the program (the last star picked up, or something bumped), the rest of
-the program carries on past it, faded, as steps that don't happen. The dots
-shrink to fit a long program. Play always runs from the start, picks the mystery clouds
-again, and the slider follows that run (and still shows it afterwards).
-
-Throughout, **debugging**: when the robot bumps into something, the step
-that went wrong shakes red, and the program stays put to be fixed. Tapping a
-block opens an empty slot before it for a missing step, and the eraser that
-appears on a block under the pointer takes it out.
 
 Each new block is first shown in a demo level (▶ on the map): the program is
 already written (with just enough room for it), so just press play and
-watch how it's used. Then each new
-tool starts on a map from earlier in the game, with too few slots
-to solve it the old way, before moving on to new maps.
+watch how it's used. Then each new tool starts on a map from earlier in the
+game, with too few slots to solve it the old way, before moving on to new
+maps.
 
-Every action has a sound, and each direction plays its own note, so a
-program plays a little tune. The speaker in the corner turns the sound off.
+## Playing
 
-Three players each have their own robot colour and their own progress. The
-level map shows each chapter as an island, and its levels as dots: filled
-in with a star once finished, a play sign for a demo, and the next one to
-play pulsing. Tapping a dot plays that level; tapping anywhere else on an
-island plays its first level not done yet.
-
-Each win shows how many blocks the program used (a block) and how many
-turns (actions) it took (a clock), with a trophy by any new best, and each player's best for each level is kept from the
-first time they finish it: the fewest blocks and the fewest turns, each on
-its own. A finished level has a trophy next to its number: tap it to see
-them (a block and a clock), to play it again and beat them. The game
-draws a big, easy-to-spot pointer. Resting the pointer on a button for a moment shows its name.
-Played by touch, there's no pointer (or names). On a phone held upright, the
-game is drawn on its side to fill the screen: turn the phone to play. On a
-small screen the program's tiles (and the eraser) are bigger, and the map
-a little smaller, to be easier to tap.
+- **The slider** along the top runs the program ahead of time, while it's
+  being built. Drag it to see where the robot would be before any step, with
+  the block about to run lifted up. A star marks each step that picks one
+  up, a red cross the step that bumps into something, and blue the steps
+  when it's raining. The end shows how it would finish (a star, a cross or
+  rain), right where the run stops, with the rest of the program faded
+  after it. Play always runs from the start, picks the mystery clouds again,
+  and the slider follows that run.
+- **Debugging:** when the robot bumps into something, the step that went
+  wrong shakes red, and the program stays put to be fixed. Tapping a block
+  opens an empty slot before it for a missing step, and the eraser that
+  appears on a block takes it out.
+- **Sound:** every action has one, and each direction plays its own note,
+  so a program plays a little tune. The speaker in the corner turns it off.
+- **Players:** three, each with their own robot colour and progress. The
+  level map shows each chapter as an island, with its levels as dots:
+  filled in with a star once finished, a play sign for a demo, and the next
+  one pulsing. Tapping a dot plays that level; tapping anywhere else on an
+  island plays its first level not done yet.
+- **Bests:** each win shows the blocks used and the turns taken, with a
+  trophy by any new best. A finished level has a trophy next to its number:
+  tap it to see the bests, then play again to beat them.
+- **Pointer and touch:** the game draws a big, easy-to-spot pointer, and
+  resting it on a button shows its name. Played by touch, there's no
+  pointer. On a phone held upright, the game is drawn on its side to fill
+  the screen (turn the phone to play), and on a small screen the program's
+  tiles are bigger, to be easier to tap.
 
 ## Making maps
 
-The **Map maker** button (with a pencil) at the top of the level map opens
-the map maker. Tap the green **+**
-to start a map, then pick a tile on the right (grass, tree, rock, ice,
-water, bridge, mystery cloud, key, door, rain cloud, star or the robot) and tap or drag
-across the map to paint it. Tapping a rain cloud again moves where it starts
-in its cycle (the ringed dot moves along). Under the map, − and + change its width and height and how many slots
-the program has (and each function, when there are functions). The buttons
-under the tiles choose the blocks it allows: the axe, sleep, repeat, loops,
-"while", "if", "else", "not", the two functions and numbers for them, and
-break. Some bring others along, as in the game's own levels: loops need
-repeat; "while" and functions need loops; "else" and "not" need an "if";
-numbers need a function; and break needs a loop and an "if" (and with
-"while", it brings "while true"). Mystery clouds always come with "if" and
-the axe, and rain clouds with sleep. The "if" and "while" can look for
+The **Map maker** button at the top of the level map opens everyone's maps.
+Tap the green **+** to start one, then pick a tile on the right (grass,
+tree, rock, ice, water, lily pad, mystery cloud, key, door, rain cloud, star
+or the robot) and tap or drag across the map to paint it. Tapping a rain
+cloud again moves where it starts in its cycle. Under the map, − and +
+change its width and height and how many slots the program (and each
+function) has.
+
+The buttons under the tiles choose the blocks it allows: the axe, sleep,
+repeat, loops, "while", "if", "else", "not", the two functions and numbers
+for them, and break. Some bring others along, as in the game's own levels:
+loops need repeat; "while" and functions need loops; "else" and "not" need
+an "if"; numbers need a function; and break needs a loop and an "if" (and
+with "while", it brings "while true"). Mystery clouds always come with "if"
+and the axe, and rain clouds with sleep. The "if" and "while" can look for
 anything painted on the map, grass, and the edge.
 
 Press play to try the map out. The arrow at the top left goes back to
 everyone's maps, where a map can be played, changed with the pencil, or
-thrown away by tapping its bin twice. There's room for 8. They're shared by
-all three players (in `maps.txt` next to the progress files, or the browser's
-local storage), and finishing one doesn't count towards a player's levels.
+thrown away by tapping its bin twice. There's room for 128, eight to a
+page, with arrows either side to turn the pages. They're shared by all
+three players, and finishing one doesn't count towards a player's levels.
 
-## Running
+## More
 
-Needs [Rust](https://rustup.rs).
-
-```bash
-cargo run --release              # full screen (F11 or Esc to leave)
-cargo run --release -- --window  # in a window
-```
-
-On Linux, macroquad needs the usual X11/OpenGL libraries (`libx11`, `libxi`,
-`libgl`), and ALSA for sound (`libasound2-dev`).
-
-### Windows (from Linux or WSL)
-
-```bash
-sudo apt install mingw-w64
-rustup target add x86_64-pc-windows-gnu
-cargo build --release --target x86_64-pc-windows-gnu
-# -> target/x86_64-pc-windows-gnu/release/robot_steps.exe
-```
-
-Under WSL the game runs on the GPU, but WSL caps full screen at 4K to about
-40 fps. The native Windows build runs at a steady 60.
-
-WSL also has no sound card, so the Linux build is silent there: ALSA reports
-it can't open a PCM device, and each sound prints "Audio thread died". The
-game still plays fine. For sound under WSL, route ALSA through WSLg's
-PulseAudio server: install `libasound2-plugins` and put this in
-`~/.asoundrc`:
-
-```
-pcm.!default { type pulse }
-ctl.!default { type pulse }
-```
-
-### Web
-
-```bash
-rustup target add wasm32-unknown-unknown
-cargo build --release --target wasm32-unknown-unknown
-mkdir -p site && cp web/* target/wasm32-unknown-unknown/release/robot_steps.wasm site/
-python3 -m http.server -d site   # then open http://localhost:8000
-```
-
-`web/mq_js_bundle.js` is macroquad's loader, copied from the macroquad crate
-(update it with macroquad). Its sound functions are linked by name, which
-`.cargo/config.toml` allows. In the browser, each player's progress is kept
-in local storage instead of a file. Every push to `master` publishes the web
-version to GitHub Pages (`.github/workflows/pages.yml`).
-
-## Keyboard (for grown-ups)
-
-| Key | Does |
-|---|---|
-| Arrows | Add a move |
-| C, then an arrow | Chop that way |
-| R / 2-9 | Repeat the last block (or loop) |
-| L | Open or close a loop |
-| I, then a choice and an arrow | Start an "if" (again to close) |
-| X (while choosing) | "Not": if there's *no*... |
-| Z | Sleep a tick |
-| , / . | Move the slider back / forward a step |
-| E | Else, inside an "if" |
-| W, then a choice and an arrow | Start a "while" (again to close) |
-| B | Break, inside a loop |
-| N | In a function, make the last count the function's number |
-| F / G | Call function ● / ▲ |
-| Tab | Switch between the main program and the functions |
-| Space / Enter | Play or stop |
-| Backspace / Delete | Undo / clear |
-| 1 / 2 / 3 | Pick a player |
-| Enter (on the map) | Play the next unfinished level |
-| M | Back to the map |
-| F11 | Toggle full screen |
-
-## Levels
-
-Levels live in `src/level.rs`, in chapters, as small text maps: `R` robot,
-`*` star, `#` tree, `@` rock, `?` mystery, `~` ice, `k` key, `D` locked door,
-`1` to `3` a rain cloud (counting down from that) and `.` grass. A demo level adds its program as text with `.demo(...)`.
-Each level has a name for the save files that never changes, however the
-levels are moved around: the levels used to be numbered straight through,
-1 to 79, and those numbers are their names (`d13` for the demo before 13),
-so old saves still work. New levels get a name instead. `cargo test` proves that every
-level can be solved within its slots, however the mystery clouds turn out,
-and that each tool is actually needed where it's introduced. Two exceptions:
-"not" with "while" (a "while there's a tree { chop it }" works like an
-"if", so there's always a way without it), and break, whose levels are only
-checked against plain blocks, not every mix of loops and "if"s.
-
-Bumping into a rock, a tree, a locked door or the edge of the map stops the
-program; it isn't a harmless "stay put" (unlike sliding on ice into something,
-which is just how the slide stops). The levels depend on this: if bumps did
-nothing, the robot could walk into a wall on purpose to line itself up, and
-some levels could be done without the tool they teach (levels 6-1 and 8-1
-without an "if", 11-2 without a function).
+- [Building and running](docs/BUILDING.md): Linux, Windows, the web
+  version, and how the levels are written and tested
+- [Keyboard shortcuts](docs/KEYBOARD.md), for grown-ups

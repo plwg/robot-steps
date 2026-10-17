@@ -28,6 +28,8 @@ pub struct Maker {
     painted: Option<(usize, usize)>,
     /// A map's bin was tapped once; a second tap (soon after) deletes it.
     delete_armed: Option<(usize, f32)>,
+    /// Which page of maps the maps screen shows.
+    page: usize,
 }
 
 impl Maker {
@@ -37,6 +39,7 @@ impl Maker {
             paint: '#',
             painted: None,
             delete_armed: None,
+            page: 0,
         }
     }
 }
@@ -89,8 +92,16 @@ fn setting_centre(i: usize) -> Vec2 {
     vec2(170.0 + i as f32 * 250.0, 690.0)
 }
 
-/// One map's card on the maps screen.
+/// How many map cards fit on a page of the maps screen.
+const PER_PAGE: usize = 8;
+
+/// The arrows to the page before and after, either side of the cards.
+const PAGE_BACK: Vec2 = vec2(44.0, 410.0);
+const PAGE_ON: Vec2 = vec2(W - 44.0, 410.0);
+
+/// Map `i`'s card on the maps screen, on its page.
 fn card(i: usize) -> Rect {
+    let i = i % PER_PAGE;
     let (col, row) = ((i % 4) as f32, (i / 4) as f32);
     let w = 290.0;
     Rect::new(
@@ -120,9 +131,20 @@ impl Game {
 
     pub(crate) fn open_maps(&mut self) {
         self.maker.delete_armed = None;
+        self.maker.page = self.maker.page.min(self.pages() - 1);
         self.custom = None;
         self.particles.clear();
         self.screen = Screen::Maps;
+    }
+
+    /// How many pages of maps there are, counting the card for a new one.
+    fn pages(&self) -> usize {
+        let cards = (self.maps.len() + 1).min(MAX_MAPS);
+        cards.div_ceil(PER_PAGE).max(1)
+    }
+
+    fn on_page(&self, i: usize) -> bool {
+        i / PER_PAGE == self.maker.page
     }
 
     fn open_maker(&mut self, i: usize) {
@@ -175,7 +197,20 @@ impl Game {
             self.open_map();
             return;
         }
-        for i in 0..self.maps.len() {
+        let page = self.maker.page;
+        let turn = if hit(m, PAGE_BACK, 34.0) && page > 0 {
+            Some(page - 1)
+        } else if hit(m, PAGE_ON, 34.0) && page + 1 < self.pages() {
+            Some(page + 1)
+        } else {
+            None
+        };
+        if let Some(page) = turn {
+            self.sfx(Sfx::Tap);
+            self.maker.page = page;
+            return;
+        }
+        for i in (0..self.maps.len()).filter(|&i| self.on_page(i)) {
             if (m - delete_button(i)).length() < 30.0 {
                 self.sfx(Sfx::Tap);
                 match armed {
@@ -183,6 +218,7 @@ impl Game {
                     Some((j, t)) if j == i && self.time - t < 4.0 => {
                         self.maps.remove(i);
                         self.save_maps();
+                        self.maker.page = self.maker.page.min(self.pages() - 1);
                     }
                     _ => self.maker.delete_armed = Some((i, self.time)),
                 }
@@ -203,7 +239,7 @@ impl Game {
         }
         // The last card makes a new map.
         let n = self.maps.len();
-        if n < MAX_MAPS && card(n).contains(m) {
+        if n < MAX_MAPS && self.on_page(n) && card(n).contains(m) {
             self.maps.push(CustomMap::new());
             self.save_maps();
             self.open_maker(n);
@@ -214,7 +250,33 @@ impl Game {
         draw_back_button();
         draw_pencil_icon(vec2(W / 2.0 - 35.0, 70.0), 30.0, INK);
         draw_star(vec2(W / 2.0 + 35.0, 70.0), 22.0, 0.0, STAR);
+        // With more than a page, arrows either side, and which page this is.
+        let pages = self.pages();
+        if pages > 1 {
+            let page = self.maker.page;
+            for (c, dir, on) in [
+                (PAGE_BACK, Dir::Left, page > 0),
+                (PAGE_ON, Dir::Right, page + 1 < pages),
+            ] {
+                let colour = if on { dir_color(dir) } else { DISABLED };
+                rounded_rect(
+                    c.x - 30.0,
+                    c.y - 26.0,
+                    60.0,
+                    60.0,
+                    14.0,
+                    darker(colour, 0.7),
+                );
+                rounded_rect(c.x - 30.0, c.y - 30.0, 60.0, 60.0, 14.0, colour);
+                draw_arrow(c, 44.0, dir, WHITE);
+            }
+            let label = format!("{}/{}", page + 1, pages);
+            draw_label(&label, vec2(W / 2.0 + 140.0, 70.0), 28.0, INK);
+        }
         for (i, map) in self.maps.iter().enumerate() {
+            if !self.on_page(i) {
+                continue;
+            }
             let mut r = card(i);
             let hover = r.contains(self.mouse);
             if hover {
@@ -254,7 +316,7 @@ impl Game {
             draw_trash_icon(d, size);
         }
         let n = self.maps.len();
-        if n < MAX_MAPS {
+        if n < MAX_MAPS && self.on_page(n) {
             let r = card(n);
             let hover = r.contains(self.mouse);
             let colour = if hover { WHITE } else { mix(SKY, WHITE, 0.6) };

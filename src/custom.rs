@@ -4,7 +4,7 @@
 use crate::level::{Level, MAX_PROGRAM, Sense};
 
 /// The most maps that can be kept.
-pub const MAX_MAPS: usize = 8;
+pub const MAX_MAPS: usize = 128;
 /// How big a map can be.
 pub const MAX_W: usize = 12;
 pub const MAX_H: usize = 7;
