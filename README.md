@@ -69,7 +69,10 @@ step, with the block about to run lifted up, the rain clouds counting, and
 one way the mystery clouds could turn out. A star along it marks each step
 that picks one up, a red cross the step that bumps into something, and blue
 the steps when it's raining; the end shows how it would finish: a star, a
-cross or rain. The dots shrink to fit a long program. Play always runs from the start, picks the mystery clouds
+cross or rain. That sits where the run stops: if it stops before the end
+of the program (the last star picked up, or something bumped), the rest of
+the program carries on past it, faded, as steps that don't happen. The dots
+shrink to fit a long program. Play always runs from the start, picks the mystery clouds
 again, and the slider follows that run (and still shows it afterwards).
 
 Throughout, **debugging**: when the robot bumps into something, the step

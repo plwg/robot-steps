@@ -1337,13 +1337,13 @@ impl Game {
         let at_end = self
             .sim
             .as_ref()
-            .is_some_and(|(_, sim)| self.scrub > 0 && self.scrub >= sim.trace.len());
+            .is_some_and(|(_, sim)| self.scrub > 0 && self.scrub >= sim.ran);
         let world = self.level().revealed(&self.preview);
         let sim = level::simulate(&self.strips, &world);
         self.scrub = if at_end {
-            sim.trace.len()
+            sim.ran
         } else {
-            self.scrub.min(sim.trace.len())
+            self.scrub.min(sim.ran)
         };
         self.sim = Some((self.strips.clone(), sim));
         self.show_scrub();
@@ -1375,12 +1375,14 @@ impl Game {
         }
     }
 
-    /// The steps the slider is over, and where its knob is (in steps, part
-    /// way through one while it runs).
-    fn slider(&self) -> Option<(&[Exec], f32)> {
+    /// The steps the slider is over (the whole program), how many of them
+    /// happen, and where its knob is (in steps, part way through one while
+    /// it runs).
+    fn slider(&self) -> Option<(&[Exec], usize, f32)> {
+        let sim = self.sim.as_ref().map(|(_, sim)| sim);
         if self.mode == Mode::Edit {
-            let (_, sim) = self.sim.as_ref()?;
-            return Some((&sim.trace, self.scrub as f32));
+            let sim = sim?;
+            return Some((&sim.trace, sim.ran, self.scrub as f32));
         }
         let len = match self.mode {
             Mode::Moving => self.move_time(),
@@ -1397,19 +1399,28 @@ impl Game {
             Mode::Bump | Mode::Sad | Mode::Win => 1.0,
             _ => 0.0,
         };
-        Some((
-            &self.trace,
-            (self.pc as f32 + part).min(self.trace.len() as f32),
-        ))
+        let at = (self.pc as f32 + part).min(self.trace.len() as f32);
+        // The simulation of this run has the rest of the program too.
+        match sim.filter(|sim| sim.trace[..sim.ran] == self.trace[..]) {
+            Some(sim) => Some((&sim.trace, sim.ran, at)),
+            None => Some((&self.trace, self.trace.len(), at)),
+        }
+    }
+
+    /// How many places along the slider there are, for `n` steps of which
+    /// `ran` happen: a step each, and one where it stops if there are steps
+    /// after that.
+    fn slider_places(n: usize, ran: usize) -> usize {
+        if ran < n { n + 1 } else { n }
     }
 
     /// Move the slider to wherever the pointer is along it.
     fn slide_to(&mut self, x: f32) {
         let Some((_, sim)) = &self.sim else { return };
-        let n = sim.trace.len();
-        let k = ((x - SLIDER.x) / SLIDER.w * n as f32)
+        let places = Self::slider_places(sim.trace.len(), sim.ran);
+        let k = ((x - SLIDER.x) / SLIDER.w * places as f32)
             .round()
-            .clamp(0.0, n as f32) as usize;
+            .clamp(0.0, sim.ran as f32) as usize;
         if k != self.scrub {
             self.scrub = k;
             self.failed_step = None;
@@ -1420,7 +1431,7 @@ impl Game {
     /// Step the slider one way or the other.
     fn nudge_slider(&mut self, by: isize) {
         let Some((_, sim)) = &self.sim else { return };
-        let k = self.scrub.saturating_add_signed(by).min(sim.trace.len());
+        let k = self.scrub.saturating_add_signed(by).min(sim.ran);
         if k != self.scrub {
             self.scrub = k;
             self.failed_step = None;
@@ -1432,7 +1443,7 @@ impl Game {
     fn click_slider(&mut self, m: Vec2) -> bool {
         let r = SLIDER;
         let hit = m.x > r.x - 24.0 && m.x < r.right() + 24.0 && (m.y - r.y).abs() < 26.0;
-        if !hit || self.slider().is_none_or(|(steps, _)| steps.is_empty()) {
+        if !hit || self.slider().is_none_or(|(steps, ..)| steps.is_empty()) {
             return false;
         }
         if self.mode != Mode::Edit {
@@ -1459,18 +1470,18 @@ impl Game {
 
     /// How a simulated run turns out, for the end of the slider.
     fn sim_end(sim: &Simulation) -> SimEnd {
-        let last = sim.worlds.last().expect("there's always a world");
+        let last = &sim.worlds[sim.ran];
         if last.stars.is_empty() {
             return SimEnd::Won;
         }
         if last.wet() {
             return SimEnd::Wet;
         }
-        match sim.trace.last().map(|e| e.step) {
+        match sim.trace[..sim.ran].last().map(|e| e.step) {
             Some(Step::Forever) => SimEnd::Stuck,
             // The last step didn't happen: it got stuck.
             Some(Step::Do(cmd)) => {
-                let before = &sim.worlds[sim.worlds.len() - 2];
+                let before = &sim.worlds[sim.ran - 1];
                 if before.clone().act(cmd).is_err() {
                     SimEnd::Stuck
                 } else {
@@ -1482,15 +1493,21 @@ impl Game {
     }
 
     fn draw_slider(&self) {
-        let Some((steps, at)) = self.slider() else {
+        let Some((steps, ran, at)) = self.slider() else {
             return;
         };
         if steps.is_empty() {
             return;
         }
         let r = SLIDER;
-        let n = steps.len() as f32;
-        let x_at = |k: f32| r.x + r.w * k / n;
+        let places = Self::slider_places(steps.len(), ran) as f32;
+        let x_at = |k: f32| r.x + r.w * k / places;
+        // Where each step's dot goes: the ones after the end are past the
+        // place where it stops.
+        let centre = |k: usize| {
+            let past = if k >= ran { 1.0 } else { 0.0 };
+            vec2(x_at(k as f32 + past + 0.5), r.y)
+        };
         draw_line(
             r.x,
             r.y,
@@ -1515,7 +1532,7 @@ impl Game {
             .filter(|sim| sim.trace.len() == steps.len());
         // The rain: the steps that end with it raining turn the track blue.
         if let Some(sim) = sim {
-            for k in 0..steps.len() {
+            for k in 0..ran {
                 if sim.worlds[k + 1].raining() {
                     let (a, b) = (x_at(k as f32), x_at(k as f32 + 1.0));
                     draw_line(
@@ -1533,8 +1550,9 @@ impl Game {
             }
         }
         // A dot for each step, in its block's colour, smaller when there are
-        // a lot of them so they don't run into each other.
-        let gap = r.w / n;
+        // a lot of them so they don't run into each other. The rest of the
+        // program, after it stops, is faded: those steps don't happen.
+        let gap = r.w / places;
         let dot = (gap * 0.4).clamp(2.0, 6.0);
         for (k, e) in steps.iter().enumerate() {
             let colour = match e.step {
@@ -1542,25 +1560,29 @@ impl Game {
                 Step::Test { .. } => IF_LIME,
                 Step::Forever => STOP_RED,
             };
-            let c = vec2(x_at(k as f32 + 0.5), r.y);
+            let colour = if k < ran {
+                colour
+            } else {
+                Color { a: 0.45, ..colour }
+            };
+            let c = centre(k);
             draw_circle(c.x, c.y, dot, colour);
         }
         if let Some(sim) = sim {
             // A star over each step that collects one (but the last, which
             // the star at the end stands for).
             let end = Self::sim_end(sim);
-            let last = steps.len() - 1;
-            for k in 0..steps.len() {
+            let last = ran.saturating_sub(1);
+            for k in 0..ran {
                 let (before, after) = (&sim.worlds[k], &sim.worlds[k + 1]);
                 let won = matches!(end, SimEnd::Won) && k == last;
                 if after.stars.len() < before.stars.len() && !won {
-                    let c = vec2(x_at(k as f32 + 0.5), r.y);
-                    draw_star(c, (gap * 0.9).clamp(6.0, 12.0), 0.0, STAR);
+                    draw_star(centre(k), (gap * 0.9).clamp(6.0, 12.0), 0.0, STAR);
                 }
             }
             // A red cross on the step that bumps into something.
-            if matches!(end, SimEnd::Stuck) && matches!(steps[last].step, Step::Do(_)) {
-                let c = vec2(x_at(last as f32 + 0.5), r.y);
+            if ran > 0 && matches!(end, SimEnd::Stuck) && matches!(steps[last].step, Step::Do(_)) {
+                let c = centre(last);
                 let size = (gap * 0.5).clamp(4.0, 8.0);
                 draw_circle(c.x, c.y, size + 2.0, WHITE);
                 draw_circle(c.x, c.y, size, STOP_RED);
@@ -1568,8 +1590,13 @@ impl Game {
                 draw_line(c.x - d, c.y - d, c.x + d, c.y + d, 2.5, WHITE);
                 draw_line(c.x - d, c.y + d, c.x + d, c.y - d, 2.5, WHITE);
             }
-            // How it ends, at the far end.
-            let c = vec2(r.right() + 22.0, r.y);
+            // How it ends: where it stops, or past the far end when it gets
+            // to the end of the program.
+            let c = if ran < steps.len() {
+                vec2(x_at(ran as f32 + 0.5), r.y)
+            } else {
+                vec2(r.right() + 22.0, r.y)
+            };
             match end {
                 SimEnd::Won => draw_star(c, 16.0, 0.0, STAR),
                 SimEnd::Stuck => draw_answer(c, false),
@@ -3640,7 +3667,7 @@ impl Game {
         );
         // While building, the step the slider is just before.
         let current = match (&self.sim, self.mode) {
-            (Some((_, sim)), Mode::Edit) if self.scrub > 0 => sim.trace.get(self.scrub),
+            (Some((_, sim)), Mode::Edit) if self.scrub > 0 => sim.trace[..sim.ran].get(self.scrub),
             _ => self.trace.get(self.pc).filter(|_| running),
         };
         // Where this strip has got to: the running slot here, or for the main

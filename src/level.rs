@@ -302,23 +302,34 @@ struct Runner<'a> {
     out: Vec<Exec>,
     /// The world just before each step.
     worlds: Vec<World>,
-    /// The robot got stuck (or wet), or collected every star: nothing more
-    /// happens.
-    stopped: bool,
+    /// How many steps really happen: the robot got stuck (or wet), or
+    /// collected every star, and nothing more happens. The rest of the
+    /// program is still unrolled after it, in the world as it was left.
+    ran: Option<usize>,
+    /// Too many steps to unroll after the end: give up.
+    halted: bool,
 }
+
+/// The most steps a program is unrolled to, after its end.
+const MAX_STEPS: usize = 1000;
 
 /// A program run all the way through ahead of time: each step, and the world
 /// just before it, then the world at the end (so one more world than steps).
+/// Only the first `ran` steps happen; the rest of the program follows them,
+/// in the world as it was left.
 pub struct Simulation {
     pub trace: Vec<Exec>,
     pub worlds: Vec<World>,
+    pub ran: usize,
 }
 
 /// Unroll a program (the main strip, then any functions) into the steps it
 /// takes when run in `world`, in order. It stops after a step that gets the
 /// robot stuck, or that collects the last star, just as the game does.
 pub fn expand(strips: &[Vec<Item>], world: &World) -> Vec<Exec> {
-    simulate(strips, world).trace
+    let mut sim = simulate(strips, world);
+    sim.trace.truncate(sim.ran);
+    sim.trace
 }
 
 /// The same, keeping the world before each step, and at the end.
@@ -328,7 +339,8 @@ pub fn simulate(strips: &[Vec<Item>], world: &World) -> Simulation {
         world: world.clone(),
         out: Vec::new(),
         worlds: Vec::new(),
-        stopped: false,
+        ran: None,
+        halted: false,
     };
     if !strips.is_empty() {
         let top = Context {
@@ -340,6 +352,7 @@ pub fn simulate(strips: &[Vec<Item>], world: &World) -> Simulation {
     }
     runner.worlds.push(runner.world);
     Simulation {
+        ran: runner.ran.unwrap_or(runner.out.len()),
         trace: runner.out,
         worlds: runner.worlds,
     }
@@ -347,7 +360,11 @@ pub fn simulate(strips: &[Vec<Item>], world: &World) -> Simulation {
 
 impl Runner<'_> {
     fn emit(&mut self, step: Step, at: Loc, left: u8, in_loop: Option<(usize, u8)>, ctx: Context) {
-        if self.stopped {
+        if self.halted {
+            return;
+        }
+        if self.ran.is_some() && self.out.len() >= MAX_STEPS {
+            self.halted = true;
             return;
         }
         let main = at.0 == 0;
@@ -360,9 +377,11 @@ impl Runner<'_> {
             fn_loop: if main { None } else { in_loop },
             call: ctx.call,
         });
-        if let Step::Do(cmd) = step {
+        if let (Step::Do(cmd), None) = (step, self.ran) {
             let stuck = self.world.act(cmd).is_err();
-            self.stopped = stuck || self.world.wet() || self.world.stars.is_empty();
+            if stuck || self.world.wet() || self.world.stars.is_empty() {
+                self.ran = Some(self.out.len());
+            }
         }
     }
 
@@ -377,7 +396,7 @@ impl Runner<'_> {
     ) {
         let items = &self.strips[strip];
         let mut i = from;
-        while i < to && !self.stopped {
+        while i < to && !self.halted {
             match items[i] {
                 Item::LoopStart { times } => {
                     let end = (i + 1..to)
@@ -396,15 +415,18 @@ impl Runner<'_> {
                     // A program always does the same thing from the same
                     // place, so getting back to one is going round for ever.
                     let mut been = HashSet::new();
-                    while !self.stopped {
+                    while !self.halted {
                         let yes = self.world.sees(sense, dir) != not;
                         self.emit(Step::Test { sense, dir, yes }, (strip, i), 1, in_loop, ctx);
                         if yes {
                             break;
                         }
                         if !been.insert(self.world.clone()) {
-                            self.emit(Step::Forever, (strip, i), 1, in_loop, ctx);
-                            self.stopped = true;
+                            // After the end, nothing moves: go on past it.
+                            if self.ran.is_none() {
+                                self.emit(Step::Forever, (strip, i), 1, in_loop, ctx);
+                                self.ran = Some(self.out.len());
+                            }
                             break;
                         }
                         self.run(strip, i + 1, end, Some((i, 0)), ctx);
@@ -2386,6 +2408,24 @@ mod tests {
         rows[7].replace_range(7..8, "R");
         let rows: Vec<&'static str> = rows.into_iter().map(|r| &*r.leak()).collect();
         Level::parse(&level("test", rows.leak())).world()
+    }
+
+    #[test]
+    fn simulation_keeps_the_rest_of_the_program() {
+        // R8 bumps into the edge on its 8th go, from the middle of the field.
+        let strips = [parse_program("R8 D2 {sU U }")];
+        let sim = simulate(&strips, &open_field());
+        assert_eq!(sim.ran, 8);
+        assert_eq!(expand(&strips, &open_field()).len(), 8);
+        // After that nothing moves, but the rest is still there.
+        assert_eq!(sim.trace.len(), 11);
+        assert_eq!(sim.worlds.len(), 12);
+        assert!(sim.worlds[8..].iter().all(|w| w.pos == (14, 7)));
+        // A "repeat until" after the end goes round once (look, D, look),
+        // since nothing moves, then the program goes on.
+        let strips = [parse_program("R8 <U D ] L")];
+        let sim = simulate(&strips, &open_field());
+        assert_eq!((sim.ran, sim.trace.len()), (8, 12));
     }
 
     fn moves(strips: &[Vec<Item>]) -> Vec<String> {
