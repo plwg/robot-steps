@@ -276,6 +276,8 @@ impl CustomMap {
                 .collect();
         }
         level.whiles = self.whiles;
+        // "While" always has "not" here: "while there's no tree".
+        level.while_not = self.whiles;
         level.breaks = self.breaks;
         // "While" can look for whatever an "if" could.
         if self.whiles {
@@ -484,6 +486,9 @@ mod tests {
         assert_eq!(maps, [m.clone()]);
         let level = m.to_level();
         assert!(level.whiles && level.otherwise && level.numbers && !level.ifs.is_empty());
+        // "While" picks what to look for, and can be "while there's no...",
+        // with or without "not" for the "if".
+        assert!(level.while_looks.len() > 1 && level.while_not && !level.not);
     }
 
     #[test]

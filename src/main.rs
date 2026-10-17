@@ -1850,6 +1850,14 @@ impl Game {
         senses
     }
 
+    /// Can what's being picked be "there's *no*..."?
+    fn not_offered(&self) -> bool {
+        match self.armed {
+            Some(Button::While) => self.level().while_not,
+            _ => self.level().not,
+        }
+    }
+
     /// Is there a loop open where the next block goes, for a break to leave?
     fn in_loop(&self) -> bool {
         let items = self.prog();
@@ -1903,7 +1911,7 @@ impl Game {
             Button::Sleep => self.level().sleep,
             Button::Sense(sense) => self.picking() && self.choices().contains(&sense),
             Button::Break => self.level().breaks,
-            Button::Not => self.picking() && self.level().not,
+            Button::Not => self.picking() && self.not_offered(),
             Button::Else => self.level().otherwise,
             Button::While => self.level().whiles,
             Button::Number => self.level().numbers,
@@ -2045,7 +2053,7 @@ impl Game {
                     self.if_not = false;
                     self.while_look = None;
                     if let [only] = Self::while_choices(self.level())[..]
-                        && (!self.level().not || only == Sense::True)
+                        && (!self.level().while_not || only == Sense::True)
                     {
                         self.pick_while(only);
                     }

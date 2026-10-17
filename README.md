@@ -141,7 +141,9 @@ loops need repeat; "while" and functions need loops; "else" and "not" need
 an "if"; numbers need a function; and break needs a loop and an "if" (and
 with "while", it brings "while true"). Mystery clouds always come with "if"
 and the axe, and rain clouds with sleep. The "if" and "while" can look for
-anything painted on the map, grass, and the edge.
+anything painted on the map, grass, and the edge, and "while" always has
+"not" too ("while there's *no* tree"); the "if" has it with the "not"
+button.
 
 Press play to try the map out. The arrow at the top left goes back to
 everyone's maps, where a map can be played, changed with the pencil, or

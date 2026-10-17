@@ -1326,6 +1326,9 @@ pub struct Level {
     pub whiles: bool,
     /// What "while" can look for.
     pub while_looks: Vec<Sense>,
+    /// "While there's *no*...": the game's own levels have it with "not" for
+    /// the "if" too, and made-up maps always.
+    pub while_not: bool,
     /// The break block, and "while true".
     pub breaks: bool,
     pub otherwise: bool,
@@ -1362,6 +1365,7 @@ impl Level {
         level.breaks = def.breaks;
         level.otherwise = def.otherwise;
         level.not = def.not;
+        level.while_not = def.not;
         level.functions = def.functions;
         level.fn_slots = def.fn_slots;
         level.numbers = def.numbers;
@@ -1424,6 +1428,7 @@ impl Level {
             whiles: false,
             while_looks: Vec::new(),
             breaks: false,
+            while_not: false,
             otherwise: false,
             not: false,
             functions: 0,
@@ -2342,7 +2347,11 @@ mod tests {
     fn while_levels_need_what_they_look_for() {
         // Break levels need an "if" too, which this search doesn't try.
         for level in numbered().iter().filter(|l| l.whiles && !l.breaks) {
-            let nots: &[bool] = if level.not { &[false, true] } else { &[false] };
+            let nots: &[bool] = if level.while_not {
+                &[false, true]
+            } else {
+                &[false]
+            };
             assert!(
                 fits_with_while(level, &level.while_looks, nots),
                 "level {} can't be done",
