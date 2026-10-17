@@ -81,7 +81,8 @@ block opens an empty slot before it for a missing step, and the eraser that
 appears on a block under the pointer takes it out.
 
 Each new block is first shown in a demo level (▶ on the map): the program is
-already written, so just press play and watch how it's used. Then each new
+already written (with just enough room for it), so just press play and
+watch how it's used. Then each new
 tool starts on a map from earlier in the game, with too few slots
 to solve it the old way, before moving on to new maps.
 

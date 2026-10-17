@@ -1284,6 +1284,11 @@ impl Level {
         level.numbers = def.numbers;
         level.sleep = def.sleep;
         level.demo = def.demo.map(parse_strips);
+        // A demo's strips just fit its program.
+        if let Some(strips) = &level.demo {
+            level.slots = tiles(&strips[0]);
+            level.fn_slots = strips[1..].iter().map(|f| tiles(f)).max().unwrap_or(0);
+        }
         level
     }
 
