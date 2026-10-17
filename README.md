@@ -100,7 +100,9 @@ its own. A finished level has a trophy next to its number: tap it to see
 them (a block and a clock), to play it again and beat them. The game
 draws a big, easy-to-spot pointer. Resting the pointer on a button for a moment shows its name.
 Played by touch, there's no pointer (or names). On a phone held upright, the
-game is drawn on its side to fill the screen: turn the phone to play.
+game is drawn on its side to fill the screen: turn the phone to play. On a
+small screen the program's tiles (and the eraser) are bigger, and the map
+a little smaller, to be easier to tap.
 
 ## Making maps
 

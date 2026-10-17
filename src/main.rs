@@ -53,6 +53,8 @@ const MAX_CELL: f32 = 108.0;
 
 const SLOTS_PER_ROW: usize = 12;
 const SLOT: f32 = 60.0;
+/// The size of a tile on a small screen, if there's room.
+const BIG_SLOT: f32 = 80.0;
 const SLOT_GAP: f32 = 8.0;
 const STRIP_Y: f32 = 652.0;
 /// Loop brackets sit in a gap this wide between tiles.
@@ -2602,7 +2604,9 @@ impl Game {
     /// so the map gets a little shorter.
     fn board(&self) -> Rect {
         if self.level().functions == 0 {
-            return BOARD;
+            // Bigger tiles push the program up into it.
+            let lift = STRIP_Y - self.strip_y();
+            return Rect::new(BOARD.x, BOARD.y, BOARD.w, BOARD.h - lift);
         }
         let top = self.strip_origin(0).y - 12.0;
         Rect::new(BOARD.x, BOARD.y, BOARD.w, top - 30.0 - BOARD.y)
@@ -2633,6 +2637,34 @@ impl Game {
         self.slots_of(strip).min(SLOTS_PER_ROW)
     }
 
+    /// How big the program's tiles are: bigger on a small screen, to be
+    /// easier to tap, as long as the widest strip still fits under the board.
+    fn slot(&self) -> f32 {
+        if !small_screen() {
+            return SLOT;
+        }
+        let cols = match self.labelled() {
+            true => (0..self.strips.len())
+                .map(|s| self.slots_of(s) + 1)
+                .max()
+                .unwrap_or(1),
+            false => self.strip_cols(0),
+        };
+        ((BOARD.w + SLOT_GAP) / cols as f32 - SLOT_GAP).clamp(SLOT, BIG_SLOT)
+    }
+
+    /// The top of the main program, without functions: as low as two rows of
+    /// tiles go.
+    fn strip_y(&self) -> f32 {
+        STRIP_Y - 2.0 * (self.slot() - SLOT)
+    }
+
+    /// The size of the eraser that appears on a program block under the
+    /// pointer.
+    fn eraser_r(&self) -> f32 {
+        ERASER_R * self.slot() / SLOT
+    }
+
     /// With functions, every strip is one row with its name (a shape, or ▶
     /// for the main program) in front, stacked at the bottom of the screen.
     fn labelled(&self) -> bool {
@@ -2641,16 +2673,17 @@ impl Game {
 
     /// The left edge and top of a strip's first slot (or its label).
     fn strip_origin(&self, strip: usize) -> Vec2 {
-        let step = SLOT + SLOT_GAP;
+        let slot = self.slot();
+        let step = slot + SLOT_GAP;
         if !self.labelled() {
             let width = self.strip_cols(0) as f32 * step - SLOT_GAP;
-            return vec2(BOARD.center().x - width / 2.0, STRIP_Y);
+            return vec2(BOARD.center().x - width / 2.0, self.strip_y());
         }
         let strips = self.strips.len();
         let widest = (0..strips).map(|s| self.slots_of(s) + 1).max().unwrap_or(1);
         let x = BOARD.center().x - (widest as f32 * step - SLOT_GAP) / 2.0;
         // Each strip is a panel (one row plus padding) with a gap between.
-        let panel = SLOT + 24.0;
+        let panel = slot + 24.0;
         let gap = 14.0;
         let total = strips as f32 * panel + (strips - 1) as f32 * gap;
         let top = H - 8.0 - total;
@@ -2659,14 +2692,15 @@ impl Game {
 
     fn label_rect(&self, strip: usize) -> Rect {
         let o = self.strip_origin(strip);
-        Rect::new(o.x, o.y, SLOT, SLOT)
+        Rect::new(o.x, o.y, self.slot(), self.slot())
     }
 
     /// Where each part of a strip goes. Tiles run along in rows; each loop
     /// bracket takes a narrow gap between two tiles.
     fn layout(&self, strip: usize) -> StripLayout {
         let cols = self.strip_cols(strip);
-        let step = SLOT + SLOT_GAP;
+        let slot = self.slot();
+        let step = slot + SLOT_GAP;
         let o = self.strip_origin(strip);
         let x0 = if self.labelled() { o.x + step } else { o.x };
         let (mut x, mut y, mut col) = (x0, o.y, 0);
@@ -2681,14 +2715,14 @@ impl Game {
         for item in &self.strips[strip] {
             if item.is_tile() {
                 wrap(&mut x, &mut y, &mut col);
-                items.push(Rect::new(x, y, SLOT, SLOT));
+                items.push(Rect::new(x, y, slot, slot));
                 x += step;
                 col += 1;
             } else {
                 if matches!(item, Item::LoopStart { .. }) {
                     wrap(&mut x, &mut y, &mut col);
                 }
-                items.push(Rect::new(x - SLOT_GAP / 2.0, y, BRACKET_W, SLOT));
+                items.push(Rect::new(x - SLOT_GAP / 2.0, y, BRACKET_W, slot));
                 x += BRACKET_W;
             }
         }
@@ -2696,7 +2730,7 @@ impl Game {
         let mut empty = Vec::new();
         for _ in used..self.slots_of(strip) {
             wrap(&mut x, &mut y, &mut col);
-            empty.push(Rect::new(x, y, SLOT, SLOT));
+            empty.push(Rect::new(x, y, slot, slot));
             x += step;
             col += 1;
         }
@@ -2704,7 +2738,7 @@ impl Game {
         let full_row = x0 + cols as f32 * step - SLOT_GAP;
         let all = items.iter().chain(&empty);
         let right = all.clone().map(Rect::right).fold(full_row, f32::max);
-        let bottom = all.map(Rect::bottom).fold(o.y + SLOT, f32::max);
+        let bottom = all.map(Rect::bottom).fold(o.y + slot, f32::max);
         let panel = Rect::new(
             o.x - 12.0,
             o.y - 12.0,
@@ -2724,7 +2758,7 @@ impl Game {
     fn click_strip(&mut self, m: Vec2) -> bool {
         // The eraser on the item under the pointer takes it out.
         if let Some((strip, i)) = self.hovered_item()
-            && (m - self.eraser_at(strip, i)).length() < ERASER_R + 4.0
+            && (m - self.eraser_at(strip, i)).length() < self.eraser_r() + 4.0
         {
             self.editing = strip;
             self.erase(strip, i);
@@ -2796,7 +2830,7 @@ impl Game {
             // Include the eraser itself, which pokes out of the item.
             let i = layout.items.iter().enumerate().position(|(i, r)| {
                 r.contains(self.mouse)
-                    || (self.mouse - self.eraser_at(strip, i)).length() < ERASER_R + 4.0
+                    || (self.mouse - self.eraser_at(strip, i)).length() < self.eraser_r() + 4.0
             })?;
             Some((strip, i))
         })
@@ -3620,8 +3654,8 @@ impl Game {
         }
         if let Some((strip, i)) = self.hovered_item() {
             let c = self.eraser_at(strip, i);
-            let near = (self.mouse - c).length() < ERASER_R + 4.0;
-            let r = if near { ERASER_R + 3.0 } else { ERASER_R };
+            let near = (self.mouse - c).length() < self.eraser_r() + 4.0;
+            let r = self.eraser_r() + if near { 3.0 } else { 0.0 };
             draw_circle(c.x, c.y, r + 3.0, WHITE);
             draw_circle(c.x, c.y, r, STOP_RED);
             let k = r * 0.45;
@@ -4135,6 +4169,7 @@ struct StripLayout {
 
 /// Shade behind `rects` (the inside of a loop), one row at a time.
 fn draw_band(rects: &[Rect], colour: Color) {
+    let height = rects.first().map_or(SLOT, |r| r.h);
     let mut rows: Vec<(f32, f32, f32)> = Vec::new();
     for r in rects {
         match rows.iter_mut().find(|(y, _, _)| *y == r.y) {
@@ -4150,7 +4185,7 @@ fn draw_band(rects: &[Rect], colour: Color) {
             left - 6.0,
             y - 6.0,
             right - left + 12.0,
-            SLOT + 12.0,
+            height + 12.0,
             16.0,
             colour,
         );
@@ -4346,6 +4381,12 @@ fn sideways() -> bool {
 }
 
 /// How much bigger than the canvas the game is drawn, letterboxed.
+/// Is the game drawn small (as on a phone): under about two thirds of its
+/// size, in the page's (or the screen's) own pixels?
+fn small_screen() -> bool {
+    view_scale() / screen_dpi_scale() < 0.65
+}
+
 fn view_scale() -> f32 {
     let (sw, sh) = (screen_width(), screen_height());
     if sideways() {
