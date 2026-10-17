@@ -41,8 +41,13 @@ impl Maker {
     }
 }
 
-/// The map maker's button on the level map.
-pub const MAKER_BUTTON: Vec2 = vec2(W - 150.0, 38.0);
+/// The map maker's button on the level map: a wide one, with its name.
+pub const MAKER_BUTTON: Rect = Rect {
+    x: W - 410.0,
+    y: 12.0,
+    w: 240.0,
+    h: 56.0,
+};
 
 /// Where the editor's map goes.
 const BOARD: Rect = Rect {

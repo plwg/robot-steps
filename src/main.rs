@@ -2292,7 +2292,7 @@ impl Game {
             self.open_players();
             return;
         }
-        if (m - MAKER_BUTTON).abs().max_element() <= 30.0 {
+        if MAKER_BUTTON.contains(m) {
             self.sfx(Sfx::Tap);
             self.open_maps();
             return;
@@ -2300,6 +2300,16 @@ impl Game {
         let near = |i: usize| (m - self.map_node(i)).length() <= MAP_DOT * 0.7;
         if let Some(i) = (0..self.levels.len()).find(|&i| near(i)) {
             self.open_level(i);
+            return;
+        }
+        // Anywhere else on an island: its first level not done yet (or its
+        // first, once they all are).
+        if let Some(ch) = (1..=self.chapters()).find(|&ch| self.island(ch).contains(m)) {
+            let mut levels = (0..self.levels.len()).filter(|&i| self.levels[i].chapter == ch);
+            let first = levels.clone().next();
+            if let Some(i) = levels.find(|&i| !self.solved[i]).or(first) {
+                self.open_level(i);
+            }
         }
     }
 
@@ -3163,23 +3173,20 @@ impl Game {
                 draw_star(c, r * 0.55, 0.0, STAR);
             }
         }
-        // The map maker.
-        let m = MAKER_BUTTON;
-        let r = if (self.mouse - m).abs().max_element() <= 30.0 {
-            28.0
-        } else {
-            26.0
-        };
-        rounded_rect(
-            m.x - r,
-            m.y - r + 5.0,
-            r * 2.0,
-            r * 2.0,
-            14.0,
-            darker(CALL_INK, 0.7),
+        // The map maker: a pencil and its name.
+        let mut m = MAKER_BUTTON;
+        if m.contains(self.mouse) {
+            m = Rect::new(m.x - 3.0, m.y - 2.0, m.w + 6.0, m.h + 4.0);
+        }
+        rounded_rect(m.x, m.y + 5.0, m.w, m.h, 16.0, darker(CALL_INK, 0.7));
+        rounded_rect(m.x, m.y, m.w, m.h, 16.0, CALL_INK);
+        maker::draw_pencil_icon(vec2(m.x + 34.0, m.center().y), 20.0, WHITE);
+        draw_label(
+            "Map maker",
+            vec2(m.center().x + 22.0, m.center().y),
+            28.0,
+            WHITE,
         );
-        rounded_rect(m.x - r, m.y - r, r * 2.0, r * 2.0, 14.0, CALL_INK);
-        maker::draw_pencil_icon(m, r * 0.7, WHITE);
         // Back to the players: a left arrow, and whose map this is.
         let b = BACK_BUTTON;
         rounded_rect(

@@ -91,7 +91,8 @@ program plays a little tune. The speaker in the corner turns the sound off.
 Three players each have their own robot colour and their own progress. The
 level map shows each chapter as an island, and its levels as dots: filled
 in with a star once finished, a play sign for a demo, and the next one to
-play pulsing.
+play pulsing. Tapping a dot plays that level; tapping anywhere else on an
+island plays its first level not done yet.
 
 Each win shows how many blocks the program used (a block) and how many
 turns (actions) it took (a clock), with a trophy by any new best, and each player's best for each level is kept from the
@@ -106,7 +107,8 @@ a little smaller, to be easier to tap.
 
 ## Making maps
 
-The pencil button on the level map opens the map maker. Tap the green **+**
+The **Map maker** button (with a pencil) at the top of the level map opens
+the map maker. Tap the green **+**
 to start a map, then pick a tile on the right (grass, tree, rock, ice,
 water, bridge, mystery cloud, key, door, rain cloud, star or the robot) and tap or drag
 across the map to paint it. Tapping a rain cloud again moves where it starts
