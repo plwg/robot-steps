@@ -83,14 +83,13 @@ each as something a robot on a map can do.
 16. **Function numbers:** call ● with a number (set with repeat), and
     inside it a count can be "●'s number" instead of a fixed one, so one
     function makes stairs of 1, 2 and 3
-17. **Rain:** rain clouds count down 3, 2, 1 (the number's on the cloud),
-    rain for 2, then start again. A row under each cloud shows its whole
+17. **Rain:** rain clouds count down 3, 2, 1, rain for 2, then start again. A row under each cloud shows its whole
     cycle (a dot for each dry tick, a drop for each tick of rain, with the
     one it's on now ringed). Every action takes a tick, and what counts is
     the weather once the robot is there, after it: being under a cloud
     that's raining then is getting wet, and the end of the run. So stepping
     under a cloud on its last drop is safe (it's dry by the time the robot
-    gets there), but stepping under one showing 1 isn't (it starts to rain
+    gets there), but stepping under one on its last dry dot isn't (it starts to rain
     as the robot arrives). Sleep (the sleep block, Zzz) until it's dry, or
     hurry across before it rains
 18. **All together**
@@ -106,10 +105,9 @@ maps.
 - **The slider** along the top runs the program ahead of time, while it's
   being built. Drag it to see where the robot would be before any step, with
   the block about to run lifted up. A star marks each step that picks one
-  up, a red cross the step that bumps into something, and blue the steps
-  when it's raining. The end shows how it would finish (a star, a cross or
-  rain), right where the run stops, with the rest of the program faded
-  after it. Play always runs from the start, picks the mystery clouds again,
+  up, and a red cross the step that bumps into something. The end shows
+  how it would finish (a star, a cross or rain), right where the run stops,
+  with the rest of the program faded after it. Play always runs from the start, picks the mystery clouds again,
   and the slider follows that run.
 - **Fewer buttons:** blocks that only make sense inside another one are in a
   second menu. Tapping "if" shows what it can look for, each also crossed

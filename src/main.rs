@@ -335,17 +335,12 @@ fn draw_puff_in(c: Vec2, s: f32, colour: Color) {
     }
 }
 
-/// A rain cloud over its tile: white and counting down with its number, or
-/// grey and raining.
+/// A rain cloud over its tile: white while it's dry, or grey and raining.
 fn draw_rain_cloud(c: Vec2, cell: f32, weather: Weather, time: f32) {
     let top = c - vec2(0.0, cell * 0.24);
     match weather {
-        // High, clear of the robot's face, with how many ticks are left.
-        Weather::Dry(n) => {
-            let puff = c - vec2(0.0, cell * 0.34);
-            draw_puff(puff, cell * 0.62);
-            draw_label(&n.to_string(), puff, cell * 0.26, INK);
-        }
+        // Small and high, clear of the robot's face.
+        Weather::Dry(_) => draw_puff(c - vec2(0.0, cell * 0.36), cell * 0.5),
         Weather::Raining(_) => {
             for i in 0..7 {
                 let x = c.x + (i as f32 / 6.0 - 0.5) * cell * 0.6;
@@ -1593,25 +1588,6 @@ impl Game {
             .as_ref()
             .map(|(_, sim)| sim)
             .filter(|sim| sim.trace.len() == steps.len());
-        // The rain: the steps that end with it raining turn the track blue.
-        if let Some(sim) = sim {
-            for k in 0..ran {
-                if sim.worlds[k + 1].raining() {
-                    let (a, b) = (x_at(k as f32), x_at(k as f32 + 1.0));
-                    draw_line(
-                        a,
-                        r.y,
-                        b,
-                        r.y,
-                        14.0,
-                        Color {
-                            a: 0.55,
-                            ..RAIN_BLUE
-                        },
-                    );
-                }
-            }
-        }
         // A dot for each step, in its block's colour, smaller when there are
         // a lot of them so they don't run into each other. The rest of the
         // program, after it stops, is faded: those steps don't happen.

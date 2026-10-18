@@ -1643,11 +1643,6 @@ impl World {
         })
     }
 
-    /// Is it raining from any of the clouds?
-    pub fn raining(&self) -> bool {
-        (0..self.h).any(|y| (0..self.w).any(|x| self.weather((x, y)).is_some_and(Weather::raining)))
-    }
-
     /// Did the robot get rained on? What counts is the weather once it's
     /// there, after its action's tick: stepping under a cloud on its last
     /// tick of rain is fine, as it's dry by the time the robot arrives, but
