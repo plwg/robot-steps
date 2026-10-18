@@ -8,13 +8,13 @@ use crate::level::{Dir, Sense, Weather};
 use crate::sound::Sfx;
 use crate::{
     AXE_BROWN, BACK_BUTTON, BREAK_PLUM, CALL_INK, DISABLED, Face, GRASS, GRASS_DARK, Game, IF_LIME,
-    INK, MAX_CELL, PANEL, PLAY_GREEN, Paint, REPEAT_TEAL, SHADOW, SKY, SLEEP_SLATE, STAR, STOP_RED,
-    Screen, W, darker, dir_color, draw_answer, draw_arrow, draw_axe_badge, draw_bracket,
-    draw_break_icon, draw_bridge, draw_door, draw_ice, draw_key, draw_label, draw_loop_icon,
-    draw_mystery, draw_no_sign, draw_number_icon, draw_play_icon, draw_question, draw_rain_cloud,
-    draw_rain_timeline, draw_robot, draw_rock, draw_sense, draw_shape, draw_sleep_icon, draw_star,
-    draw_trash_icon, draw_tree, draw_water, draw_while_icon, mix, progress, rounded_rect,
-    upright_bridge,
+    INK, MAX_CELL, NUMBER_GAP, PANEL, PLAY_GREEN, Paint, REPEAT_TEAL, SHADOW, SKY, SLEEP_SLATE,
+    STAR, STOP_RED, Screen, W, darker, dir_color, draw_answer, draw_arrow, draw_axe_badge,
+    draw_bracket, draw_break_icon, draw_bridge, draw_door, draw_grid_numbers, draw_ice, draw_key,
+    draw_label, draw_loop_icon, draw_mystery, draw_no_sign, draw_number_icon, draw_play_icon,
+    draw_question, draw_rain_cloud, draw_rain_timeline, draw_robot, draw_rock, draw_sense,
+    draw_shape, draw_sleep_icon, draw_star, draw_trash_icon, draw_tree, draw_water,
+    draw_while_icon, mix, progress, rounded_rect, upright_bridge,
 };
 
 /// Where the map maker is up to.
@@ -364,7 +364,9 @@ impl Game {
     fn maker_grid(&self) -> (Vec2, f32) {
         let m = self.map();
         let (w, h) = (m.w as f32, m.h as f32);
-        let cell = (BOARD.w / w).min(BOARD.h / h).min(MAX_CELL);
+        let cell = ((BOARD.w - 2.0 * NUMBER_GAP) / w)
+            .min((BOARD.h - 2.0 * NUMBER_GAP) / h)
+            .min(MAX_CELL);
         (BOARD.center() - vec2(w, h) * cell / 2.0, cell)
     }
 
@@ -546,6 +548,7 @@ impl Game {
         let size = vec2(map.w as f32, map.h as f32) * cell;
         let board = Rect::new(o.x, o.y, size.x, size.y);
         draw_custom_map(map, board, self.time, self.paint());
+        draw_grid_numbers(o, cell, map.w, map.h);
         // A grid, so each tile is easy to aim at.
         let line = Color::new(1.0, 1.0, 1.0, 0.35);
         for x in 1..map.w {

@@ -50,6 +50,8 @@ const BOARD: Rect = Rect {
     h: 540.0,
 };
 const MAX_CELL: f32 = 108.0;
+/// Room left round the map for its row and column numbers.
+pub const NUMBER_GAP: f32 = 34.0;
 
 const SLOTS_PER_ROW: usize = 12;
 const SLOT: f32 = 60.0;
@@ -806,6 +808,21 @@ fn draw_trophy(c: Vec2, size: f32, colour: Color) {
 }
 
 /// Text starting at `left` (and centred up and down on it).
+/// Numbers along the top and left of a map (0, 1, 2, ...), to help count
+/// the squares.
+pub fn draw_grid_numbers(o: Vec2, cell: f32, w: usize, h: usize) {
+    let size = (cell * 0.5).min(30.0);
+    let colour = Color::new(INK.r, INK.g, INK.b, 0.85);
+    for x in 0..w {
+        let c = o + vec2((x as f32 + 0.5) * cell, -28.0);
+        draw_label(&x.to_string(), c, size, colour);
+    }
+    for y in 0..h {
+        let c = o + vec2(-28.0, (y as f32 + 0.5) * cell);
+        draw_label(&y.to_string(), c, size, colour);
+    }
+}
+
 fn draw_label_left(text: &str, left: Vec2, size: f32, color: Color) {
     let scale = view_scale() * screen_dpi_scale();
     let font_size = (size * scale).round() as u16;
@@ -2790,8 +2807,8 @@ impl Game {
     fn cell_size(&self) -> f32 {
         let l = self.level();
         let board = self.board();
-        (board.w / l.w as f32)
-            .min(board.h / l.h as f32)
+        ((board.w - 2.0 * NUMBER_GAP) / l.w as f32)
+            .min((board.h - 2.0 * NUMBER_GAP) / l.h as f32)
             .min(MAX_CELL)
     }
 
@@ -3505,6 +3522,7 @@ impl Game {
             18.0,
             darker(GRASS_DARK, 0.85),
         );
+        draw_grid_numbers(o, cell, l.w as usize, l.h as usize);
         for y in 0..l.h {
             for x in 0..l.w {
                 let (px, py) = (o.x + x as f32 * cell, o.y + y as f32 * cell);
