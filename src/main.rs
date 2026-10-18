@@ -167,6 +167,9 @@ fn draw_quad(a: Vec2, b: Vec2, c: Vec2, d: Vec2, color: Color) {
 /// Text centred on a point. Rendered at the real screen resolution so it
 /// stays sharp however much the canvas is scaled up.
 fn draw_label(text: &str, centre: Vec2, size: f32, color: Color) {
+    // The font's zero has a slash through it, which a child learning their
+    // numbers might not know. Its O is the same shape without one.
+    let text = &text.replace('0', "O");
     let scale = view_scale() * screen_dpi_scale();
     let font_size = (size * scale).round() as u16;
     let dims = measure_text(text, None, font_size, 1.0 / scale);
@@ -337,8 +340,12 @@ fn draw_puff_in(c: Vec2, s: f32, colour: Color) {
 fn draw_rain_cloud(c: Vec2, cell: f32, weather: Weather, time: f32) {
     let top = c - vec2(0.0, cell * 0.24);
     match weather {
-        // Small and high, clear of the robot's face.
-        Weather::Dry(_) => draw_puff(c - vec2(0.0, cell * 0.36), cell * 0.5),
+        // High, clear of the robot's face, with how many ticks are left.
+        Weather::Dry(n) => {
+            let puff = c - vec2(0.0, cell * 0.34);
+            draw_puff(puff, cell * 0.62);
+            draw_label(&n.to_string(), puff, cell * 0.26, INK);
+        }
         Weather::Raining(_) => {
             for i in 0..7 {
                 let x = c.x + (i as f32 / 6.0 - 0.5) * cell * 0.6;
@@ -363,11 +370,11 @@ fn draw_rain_cloud(c: Vec2, cell: f32, weather: Weather, time: f32) {
 /// it's on now is big; ones already gone are faint.
 pub fn draw_rain_timeline(c: Vec2, cell: f32, weather: Weather) {
     let now = weather.phase();
-    let gap = cell * 0.18;
-    let y = c.y + cell * 0.38;
+    let gap = cell * 0.19;
+    let y = c.y + cell * 0.36;
     for k in 0..RAIN_CYCLE {
         let x = c.x + (k as f32 - (RAIN_CYCLE - 1) as f32 / 2.0) * gap;
-        let r = cell * if k == now { 0.065 } else { 0.05 };
+        let r = cell * if k == now { 0.085 } else { 0.065 };
         let a = if k < now { 0.35 } else { 1.0 };
         let p = vec2(x, y);
         // A ring round the one it's on now.
@@ -1356,6 +1363,17 @@ impl Game {
         self.event = None;
         self.pc = 0;
         self.set_mode(Mode::Edit);
+        self.show_scrub();
+    }
+
+    /// After a run that didn't win, back to building, with the slider at the
+    /// end of the run: the robot stays where it got to, so it's easy to see
+    /// how far it went and what stopped it.
+    fn stay_put(&mut self) {
+        self.reset_robot();
+        if let Some((_, sim)) = &self.sim {
+            self.scrub = sim.ran;
+        }
         self.show_scrub();
     }
 
@@ -2365,7 +2383,7 @@ impl Game {
             Mode::Chopping if self.timer >= CHOP_TIME => self.finish_action(),
             Mode::Sleeping if self.timer >= SLEEP_TIME => self.finish_action(),
             Mode::Bump if self.timer >= BUMP_TIME => self.set_mode(Mode::Sad),
-            Mode::Sad if self.timer >= SAD_TIME => self.reset_robot(),
+            Mode::Sad if self.timer >= SAD_TIME => self.stay_put(),
             Mode::Win if self.timer > 1.5 && (self.timer % 1.2) < dt => self.confetti(),
             _ => {}
         }
@@ -2689,6 +2707,7 @@ impl Game {
             Button::Call(_) => "Run the triangle function",
             Button::Play if self.running() => "Stop",
             Button::Play => "Play",
+            Button::Undo if self.armed.is_some() => "Don't add it",
             Button::Undo => "Take out a block",
             Button::Clear => "Clear the program",
             Button::Fullscreen => "Full screen",
@@ -3672,7 +3691,12 @@ impl Game {
         // it. Where it's raining, the grass turns wet and blue.
         for y in 0..l.h {
             for x in 0..l.w {
-                if let Some(weather) = self.world.weather((x, y)) {
+                let weather = if self.rain_lags() {
+                    self.world.weather_before((x, y))
+                } else {
+                    self.world.weather((x, y))
+                };
+                if let Some(weather) = weather {
                     let c = self.cell_centre((x, y)).0;
                     if weather.raining() {
                         let k = cell / 2.0;
@@ -3684,6 +3708,13 @@ impl Game {
                 }
             }
         }
+    }
+
+    /// Is an action happening, in the weather from before its tick? (Or the
+    /// robot got wet, so show the rain that did it.)
+    fn rain_lags(&self) -> bool {
+        matches!(self.mode, Mode::Moving | Mode::Sleeping | Mode::Chopping)
+            || (self.mode == Mode::Sad && self.world.wet())
     }
 
     /// How far open a door is: it swings open once the robot is up against
