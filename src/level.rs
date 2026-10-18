@@ -1632,14 +1632,10 @@ impl World {
 
     /// What the rain cloud at `p` is doing, if there's one there.
     pub fn weather(&self, p: Pos) -> Option<Weather> {
-        self.weather_at(p, self.clock)
-    }
-
-    fn weather_at(&self, p: Pos, clock: u8) -> Option<Weather> {
         let Some(Tile::Rain(start)) = self.tile(p) else {
             return None;
         };
-        let phase = (RAIN_DRY - start + clock) % RAIN_CYCLE;
+        let phase = (RAIN_DRY - start + self.clock) % RAIN_CYCLE;
         Some(if phase < RAIN_DRY {
             Weather::Dry(RAIN_DRY - phase)
         } else {
@@ -1653,24 +1649,12 @@ impl World {
     }
 
     /// Did the robot get rained on? What counts is the weather once it's
-    /// there, after its action: stepping under a cloud on its last tick of
-    /// rain is fine, as it's dry by the time the robot arrives, but stepping
-    /// under one just as it starts to rain, or staying while it does, is
-    /// getting wet.
+    /// there, after its action's tick: stepping under a cloud on its last
+    /// tick of rain is fine, as it's dry by the time the robot arrives, but
+    /// stepping under one on its last dry tick, as it starts to rain, or
+    /// staying while it does, is getting wet.
     pub fn wet(&self) -> bool {
         self.weather(self.pos).is_some_and(Weather::raining)
-    }
-
-    /// What the rain cloud at `p` will be doing after the next action: the
-    /// weather the robot would find there. The game shows this between
-    /// actions, so a cloud that looks dry is safe to step under.
-    pub fn weather_next(&self, p: Pos) -> Option<Weather> {
-        let clock = if self.rainy() {
-            self.clock + 1
-        } else {
-            self.clock
-        };
-        self.weather_at(p, clock % RAIN_CYCLE)
     }
 
     /// Are there any rain clouds?
@@ -3053,9 +3037,7 @@ mod tests {
     fn what_counts_is_the_weather_on_arriving() {
         // The cloud shows 1: one more dry tick, then two of rain.
         let start = Level::parse(&level("test", &["R1.*"])).world();
-        // Under it just as the rain starts: wet. (It's shown beforehand as
-        // the weather the robot would arrive in.)
-        assert_eq!(start.weather_next((1, 0)), Some(Weather::Raining(2)));
+        // Under it on its last dry tick: it's raining when the robot's there.
         let mut world = start.clone();
         world.act(Cmd::Move(Dir::Right)).unwrap();
         assert!(world.wet());
@@ -3064,7 +3046,6 @@ mod tests {
         world.act(Cmd::Sleep).unwrap();
         world.act(Cmd::Sleep).unwrap();
         assert_eq!(world.weather((1, 0)), Some(Weather::Raining(1)));
-        assert_eq!(world.weather_next((1, 0)), Some(Weather::Dry(3)));
         world.act(Cmd::Move(Dir::Right)).unwrap();
         assert!(!world.wet());
     }

@@ -3691,12 +3691,7 @@ impl Game {
         // it. Where it's raining, the grass turns wet and blue.
         for y in 0..l.h {
             for x in 0..l.w {
-                let weather = if self.arriving() {
-                    self.world.weather((x, y))
-                } else {
-                    self.world.weather_next((x, y))
-                };
-                if let Some(weather) = weather {
+                if let Some(weather) = self.world.weather((x, y)) {
                     let c = self.cell_centre((x, y)).0;
                     if weather.raining() {
                         let k = cell / 2.0;
@@ -3708,18 +3703,6 @@ impl Game {
                 }
             }
         }
-    }
-
-    /// Is an action happening (or just done), so the rain clouds show the
-    /// weather it arrives in? Otherwise they show the weather the robot would
-    /// find after its next action, so a cloud that looks dry is safe to step
-    /// under. A robot that got wet (still showing at the end of its run, or
-    /// at the end of the slider) shows the rain that did it.
-    fn arriving(&self) -> bool {
-        matches!(
-            self.mode,
-            Mode::Moving | Mode::Sleeping | Mode::Chopping | Mode::Win
-        ) || self.world.wet()
     }
 
     /// How far open a door is: it swings open once the robot is up against
