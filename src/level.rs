@@ -353,6 +353,17 @@ pub fn expand(strips: &[Vec<Item>], world: &World) -> Vec<Exec> {
     sim.trace
 }
 
+/// Does the program get every star in `world`?
+pub fn wins(strips: &[Vec<Item>], world: &World) -> bool {
+    let sim = simulate(strips, world);
+    sim.worlds[sim.ran].stars.is_empty()
+}
+
+/// The most mystery clouds whose every way to turn out is tried, and how
+/// many ways are tried at random on a map with more.
+const TRY_EVERY_WAY: usize = 8;
+const TRIES: usize = 64;
+
 /// The same, keeping the world before each step, and at the end.
 pub fn simulate(strips: &[Vec<Item>], world: &World) -> Simulation {
     let mut runner = Runner {
@@ -1486,6 +1497,37 @@ impl Level {
     /// tossed for each: any way at all, all trees or all grass included.
     pub fn random_outcome(&self, mut coin: impl FnMut() -> bool) -> Vec<bool> {
         (0..self.mysteries.len()).map(|_| coin()).collect()
+    }
+
+    /// How the mysteries turn out when play is pressed: a way that beats
+    /// `strips` if there is one, so a program only wins when it's ready for
+    /// whatever the clouds do, not when it's lucky. `pick(n)` chooses one of
+    /// `n` (at random, in the game). A map with lots of clouds has too many
+    /// ways to try them all, so it tries some at random.
+    pub fn tricky_outcome(
+        &self,
+        strips: &[Vec<Item>],
+        mut pick: impl FnMut(usize) -> usize,
+    ) -> Vec<bool> {
+        let n = self.mysteries.len();
+        let ways: Vec<Vec<bool>> = if n <= TRY_EVERY_WAY {
+            (0..1u32 << n)
+                .map(|bits| (0..n).map(|i| bits & (1 << i) != 0).collect())
+                .collect()
+        } else {
+            (0..TRIES)
+                .map(|_| self.random_outcome(|| pick(2) == 1))
+                .collect()
+        };
+        let beaten: Vec<&Vec<bool>> = ways
+            .iter()
+            .filter(|way| !wins(strips, &self.revealed(way)))
+            .collect();
+        if beaten.is_empty() {
+            self.random_outcome(|| pick(2) == 1)
+        } else {
+            beaten[pick(beaten.len())].clone()
+        }
     }
 
     /// Every way the mysteries can turn out. That doubles with each cloud,
@@ -2831,6 +2873,21 @@ mod tests {
         let single = Level::parse(&level("test", &["R?"]).with_tree_if());
         assert_eq!(single.outcomes(), vec![vec![false], vec![true]]);
         assert_eq!(pair.random_outcome(|| true), [true, true]);
+    }
+
+    #[test]
+    fn clouds_beat_a_lucky_program() {
+        let level = Level::parse(&level("test", &["R?*"]).with_tree_if());
+        let first = |_| 0;
+        // Only wins if the cloud is grass, so it's a tree.
+        assert_eq!(level.tricky_outcome(&parse_strips("R R"), first), [true]);
+        // The "if" was never closed: only wins if it's a tree.
+        let unclosed = parse_strips("{tR cR R R }");
+        assert_eq!(level.tricky_outcome(&unclosed, first), [false]);
+        // Ready for anything: either way.
+        let ready = parse_strips("{tR cR } R R");
+        assert_eq!(level.tricky_outcome(&ready, |_| 1), [true]);
+        assert_eq!(level.tricky_outcome(&ready, |_| 0), [false]);
     }
 
     #[test]

@@ -2178,13 +2178,16 @@ impl Game {
 
     /// Reveal what's under the mystery clouds (different every time), then go.
     fn start_run(&mut self) {
-        // Play picks the mystery clouds again, and the slider follows it, so
-        // it shows the run that's happening (and still does afterwards).
+        // Play picks the mystery clouds again (a way that beats the program,
+        // if there is one), and the slider follows it, so it shows the run
+        // that's happening (and still does afterwards).
         let mysteries = self.level().mysteries.clone();
         if mysteries.is_empty() {
             self.refresh_sim();
         } else {
-            self.preview = self.level().random_outcome(|| gen_range(0, 2) == 1);
+            self.preview = self
+                .level()
+                .tricky_outcome(&self.strips, |n| gen_range(0, n));
             self.resimulate();
         }
         // Always from the start, whatever the slider shows.
