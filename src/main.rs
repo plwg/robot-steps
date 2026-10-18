@@ -3713,12 +3713,13 @@ impl Game {
     /// Is an action happening (or just done), so the rain clouds show the
     /// weather it arrives in? Otherwise they show the weather the robot would
     /// find after its next action, so a cloud that looks dry is safe to step
-    /// under.
+    /// under. A robot that got wet (still showing at the end of its run, or
+    /// at the end of the slider) shows the rain that did it.
     fn arriving(&self) -> bool {
         matches!(
             self.mode,
             Mode::Moving | Mode::Sleeping | Mode::Chopping | Mode::Win
-        ) || (self.mode == Mode::Sad && self.world.wet())
+        ) || self.world.wet()
     }
 
     /// How far open a door is: it swings open once the robot is up against
