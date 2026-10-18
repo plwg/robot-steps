@@ -91,7 +91,10 @@ each as something a robot on a map can do.
     safe, even on its last dry tick, but staying under it for an action
     while it rains is getting wet, and the end of the run. It can't be
     walked into while it's raining, so sleep (the sleep block, Zzz) until
-    it stops, or hurry across before it starts
+    it stops, or hurry across before it starts. While the program is being
+    built, each block that meets a cloud shows the weather it'll meet there:
+    a sun for dry, a rain cloud for wet. So there's no counting ticks: put a
+    sleep in front of a rainy block and see it turn sunny
 18. **All together**
 
 Each new block is first shown in a demo level (▶ on the map): the program is

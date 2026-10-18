@@ -1652,6 +1652,28 @@ impl World {
         })
     }
 
+    /// Are there any rain clouds?
+    pub fn rainy(&self) -> bool {
+        self.tiles.iter().any(|t| matches!(t, Tile::Rain(_)))
+    }
+
+    /// Does doing `cmd` here meet a rain cloud, and is it raining then?
+    /// `Some(true)`: it rains on the robot, or the robot tries to drive into
+    /// the rain. `Some(false)`: the robot ends up under a cloud that's dry for
+    /// the step. `None`: no cloud.
+    pub fn rain_on(&self, cmd: Cmd) -> Option<bool> {
+        let mut after = self.clone();
+        if after.act(cmd).is_err() {
+            let (dx, dy) = cmd.dir()?.delta();
+            let next = (self.pos.0 + dx, self.pos.1 + dy);
+            return self.weather(next).filter(|w| w.raining()).map(|_| true);
+        }
+        if after.wet() {
+            return Some(true);
+        }
+        self.weather(after.pos).map(|_| false)
+    }
+
     /// Is it raining from any of the clouds?
     pub fn raining(&self) -> bool {
         (0..self.h).any(|y| (0..self.w).any(|x| self.weather((x, y)).is_some_and(Weather::raining)))
@@ -1677,7 +1699,7 @@ impl World {
     /// same place, for spotting a "while" that would never end.)
     fn tick(&mut self) {
         self.soaked = self.weather(self.pos).is_some_and(Weather::raining);
-        if self.tiles.iter().any(|t| matches!(t, Tile::Rain(_))) {
+        if self.rainy() {
             self.clock = (self.clock + 1) % RAIN_CYCLE;
         }
     }
@@ -3068,6 +3090,25 @@ mod tests {
         world.act(Cmd::Move(Dir::Right)).unwrap();
         world.act(Cmd::Sleep).unwrap();
         assert!(world.wet());
+    }
+
+    #[test]
+    fn steps_know_the_weather_they_meet() {
+        // The cloud shows 1: dry for the first step, then two of rain.
+        let mut world = Level::parse(&level("test", &["R1.*"])).world();
+        let right = Cmd::Move(Dir::Right);
+        assert_eq!(world.rain_on(right), Some(false), "under it while it's dry");
+        world.act(Cmd::Sleep).unwrap();
+        assert_eq!(world.rain_on(right), Some(true), "into the rain");
+        assert_eq!(world.rain_on(Cmd::Sleep), None, "nowhere near it");
+        world.act(Cmd::Sleep).unwrap();
+        world.act(Cmd::Sleep).unwrap();
+        world.act(right).unwrap();
+        assert_eq!(world.rain_on(Cmd::Sleep), Some(false), "a dry nap under it");
+        world.act(Cmd::Sleep).unwrap();
+        world.act(Cmd::Sleep).unwrap();
+        assert_eq!(world.rain_on(Cmd::Sleep), Some(true), "staying in the rain");
+        assert_eq!(world.rain_on(right), None, "out as it starts");
     }
 
     #[test]

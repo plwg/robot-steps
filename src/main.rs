@@ -10,6 +10,7 @@ mod maker;
 mod progress;
 mod sound;
 
+use std::collections::HashMap;
 use std::f32::consts::PI;
 
 use custom::CustomMap;
@@ -3922,11 +3923,16 @@ impl Game {
             Item::Break => draw_break_icon(r.center(), r.w),
         }
         if let Some(n) = badge {
-            let c = vec2(r.x + r.w - 4.0, r.y + 4.0);
-            draw_circle(c.x, c.y, 15.0, INK);
-            draw_circle(c.x, c.y, 13.0, WHITE);
-            draw_count(n, c, strip);
+            Self::draw_badge(r, n, strip);
         }
+    }
+
+    /// A block's count, in its top corner.
+    fn draw_badge(r: Rect, n: u8, strip: usize) {
+        let c = vec2(r.x + r.w - 4.0, r.y + 4.0);
+        draw_circle(c.x, c.y, 15.0, INK);
+        draw_circle(c.x, c.y, 13.0, WHITE);
+        draw_count(n, c, strip);
     }
 
     /// The start of an "otherwise" lane: a grey tab with the fork that
@@ -3939,8 +3945,9 @@ impl Game {
     }
 
     fn draw_program(&self) {
+        let rain = self.rain_marks();
         for strip in 0..self.strips.len() {
-            self.draw_strip(strip);
+            self.draw_strip(strip, &rain);
         }
         if let Some((strip, i)) = self.hovered_item() {
             let c = self.eraser_at(strip, i);
@@ -3974,7 +3981,28 @@ impl Game {
         }
     }
 
-    fn draw_strip(&self, strip: usize) {
+    /// The blocks that meet a rain cloud in the run worked out ahead of
+    /// time, and whether it's raining then (if it ever is, for a block that
+    /// runs more than once), so each one can show the weather it meets.
+    fn rain_marks(&self) -> HashMap<Loc, bool> {
+        let mut marks = HashMap::new();
+        let Some((_, sim)) = &self.sim else {
+            return marks;
+        };
+        if !self.world.rainy() {
+            return marks;
+        }
+        for (k, exec) in sim.trace[..sim.ran].iter().enumerate() {
+            if let Step::Do(cmd) = exec.step
+                && let Some(rain) = sim.worlds[k].rain_on(cmd)
+            {
+                *marks.entry(exec.at).or_insert(false) |= rain;
+            }
+        }
+        marks
+    }
+
+    fn draw_strip(&self, strip: usize, rain: &HashMap<Loc, bool>) {
         let items = &self.strips[strip];
         let layout = self.layout(strip);
         let p = layout.panel;
@@ -4125,7 +4153,17 @@ impl Game {
                 rounded_rect(r.x, r.y, r.w, r.h, 12.0, SLOT_EMPTY);
                 continue;
             }
-            Self::draw_item(r, item, colour, badge, strip);
+            // The weather it meets goes in the corner, or next to the count if
+            // there is one (under it, so the count stays on top).
+            let wet = rain.get(&(strip, i)).copied();
+            Self::draw_item(r, item, colour, badge.filter(|_| wet.is_none()), strip);
+            if let Some(wet) = wet {
+                let x = r.right() - if badge.is_some() { 30.0 } else { 4.0 };
+                draw_weather_mark(vec2(x, r.y + 4.0), wet);
+                if let Some(n) = badge {
+                    Self::draw_badge(r, n, strip);
+                }
+            }
             // An "if" shows its answer once the robot has looked: yes or no.
             if running_block
                 && let Some(Step::Test { yes, .. }) = current.map(|e| e.step)
@@ -4703,6 +4741,34 @@ fn draw_fork_icon(c: Vec2, size: f32, colour: Color) {
 fn draw_number_icon(c: Vec2, half: f32, function: usize) {
     draw_circle(c.x, c.y, half * 0.55, WHITE);
     draw_shape(c, half * 0.32, function);
+}
+
+/// On a block, the weather it meets under a rain cloud: a sun for dry, a
+/// rain cloud for wet.
+fn draw_weather_mark(c: Vec2, wet: bool) {
+    draw_circle(c.x, c.y, 15.0, if wet { RAIN_BLUE } else { GOLD });
+    draw_circle(c.x, c.y, 13.0, WHITE);
+    if wet {
+        for dx in [-5.0, 0.0, 5.0] {
+            draw_line(
+                c.x + dx,
+                c.y + 2.0,
+                c.x + dx - 2.0,
+                c.y + 8.0,
+                2.5,
+                RAIN_BLUE,
+            );
+        }
+        draw_puff_in(c - vec2(0.0, 3.0), 18.0, RAIN_CLOUD);
+    } else {
+        for k in 0..8 {
+            let a = k as f32 * PI / 4.0;
+            let d = vec2(a.cos(), a.sin());
+            let (p, q) = (c + d * 7.5, c + d * 10.5);
+            draw_line(p.x, p.y, q.x, q.y, 2.0, GOLD);
+        }
+        draw_circle(c.x, c.y, 5.5, STAR);
+    }
 }
 
 /// A count in a badge: a number, or for `NUMBER`, function `strip`'s shape.
