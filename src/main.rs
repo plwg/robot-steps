@@ -3691,10 +3691,10 @@ impl Game {
         // it. Where it's raining, the grass turns wet and blue.
         for y in 0..l.h {
             for x in 0..l.w {
-                let weather = if self.rain_lags() {
-                    self.world.weather_before((x, y))
-                } else {
+                let weather = if self.arriving() {
                     self.world.weather((x, y))
+                } else {
+                    self.world.weather_next((x, y))
                 };
                 if let Some(weather) = weather {
                     let c = self.cell_centre((x, y)).0;
@@ -3710,11 +3710,15 @@ impl Game {
         }
     }
 
-    /// Is an action happening, in the weather from before its tick? (Or the
-    /// robot got wet, so show the rain that did it.)
-    fn rain_lags(&self) -> bool {
-        matches!(self.mode, Mode::Moving | Mode::Sleeping | Mode::Chopping)
-            || (self.mode == Mode::Sad && self.world.wet())
+    /// Is an action happening (or just done), so the rain clouds show the
+    /// weather it arrives in? Otherwise they show the weather the robot would
+    /// find after its next action, so a cloud that looks dry is safe to step
+    /// under.
+    fn arriving(&self) -> bool {
+        matches!(
+            self.mode,
+            Mode::Moving | Mode::Sleeping | Mode::Chopping | Mode::Win
+        ) || (self.mode == Mode::Sad && self.world.wet())
     }
 
     /// How far open a door is: it swings open once the robot is up against

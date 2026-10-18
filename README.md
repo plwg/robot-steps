@@ -85,13 +85,13 @@ each as something a robot on a map can do.
     function makes stairs of 1, 2 and 3
 17. **Rain:** rain clouds count down 3, 2, 1 (the number's on the cloud),
     rain for 2, then start again. A row under each cloud shows its whole
-    cycle (a dot for each dry tick, a drop for each tick of rain, with the
-    one it's on now ringed). Every action takes a tick, and the weather
-    showing is the weather for the next one: stepping under a dry cloud is
-    safe, even on its last dry tick, but staying under it for an action
-    while it rains is getting wet, and the end of the run. It can't be
-    walked into while it's raining, so sleep (the sleep block, Zzz) until
-    it stops, or hurry across before it starts
+    cycle (a dot for each dry tick, a drop for each tick of rain). Every
+    action takes a tick, and what counts is the weather once the robot is
+    there: being under a cloud that's raining after an action is getting
+    wet, and the end of the run. So the clouds show the weather the robot
+    would find after its next action (ringed on the row): one that looks dry
+    is safe to step under, even on its last tick of rain. Sleep (the sleep
+    block, Zzz) until it's dry, or hurry across before it rains
 18. **All together**
 
 Each new block is first shown in a demo level (▶ on the map): the program is

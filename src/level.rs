@@ -94,8 +94,7 @@ impl Weather {
 }
 
 impl Tile {
-    /// Can the robot drive onto this tile (without unlocking anything, and
-    /// if it isn't raining there)?
+    /// Can the robot drive onto this tile (without unlocking anything)?
     fn passable(self) -> bool {
         matches!(
             self,
@@ -1279,16 +1278,15 @@ pub const CHAPTERS: &[Chapter] = &[
     Chapter {
         name: "Rain",
         levels: &[
-            level("rain-demo", &["R.1.*"]).with_sleep(3).demo("R Z2 R3"),
-            level("rain-1", &["R..1*"]).with_sleep(2),
+            level("rain-demo", &["R.2.*"]).with_sleep(3).demo("R Z3 R3"),
+            level("rain-1", &["R1.*"]).with_sleep(2),
             // Hurry across the first one; sleep through the second.
             level("rain-2", &["R.12.*"]).with_sleep(2),
-            level("rain-3", &["R3.1.*"]).with_sleep(2),
+            level("rain-3", &["R3.2.*"]).with_sleep(2),
             level("rain-4", &["R12.3*"]).with_sleep(2),
-            level("rain-5", &["R2.1.3.*"]).with_sleep(3),
-            // It's raining when the robot gets to the cloud: wait where it's
-            // dry, not under it.
-            level("rain-6", &["R@@@", ".1.*", "@3@."]).with_sleep(3),
+            level("rain-5", &["R2.2.3.*"]).with_sleep(3),
+            // Two ways round: which one keeps dry?
+            level("rain-6", &["R@@@", ".2.*", "@1@."]).with_sleep(3),
             // Two ways to the star. Over the top, there are too many clouds
             // to get under before it rains (and no sleep block); along the
             // bottom, the ice slides all the way in one go.
@@ -1486,7 +1484,6 @@ impl Level {
             keys: self.keys.clone(),
             held: 0,
             clock: 0,
-            soaked: false,
         }
     }
 
@@ -1591,8 +1588,6 @@ pub struct World {
     /// Ticks so far (one per action), round the rain clouds' cycle: all the
     /// clouds need to know.
     clock: u8,
-    /// The last action was under a cloud while it rained.
-    soaked: bool,
 }
 
 impl World {
@@ -1625,12 +1620,12 @@ impl World {
         inside.then(|| self.tiles[(y * self.w + x) as usize])
     }
 
-    /// Can the robot drive onto `p`: an open tile (where it isn't raining),
-    /// or a door it has a key for?
+    /// Can the robot drive onto `p`: an open tile, or a door it has a key for?
+    /// (Rain doesn't stop it: it just gets wet.)
     fn can_enter(&self, p: Pos) -> bool {
         match self.tile(p) {
             Some(Tile::Door) => self.held > 0,
-            Some(tile) => tile.passable() && !self.weather(p).is_some_and(Weather::raining),
+            Some(tile) => tile.passable(),
             None => false,
         }
     }
@@ -1657,34 +1652,44 @@ impl World {
         (0..self.h).any(|y| (0..self.w).any(|x| self.weather((x, y)).is_some_and(Weather::raining)))
     }
 
-    /// Did the robot get rained on? The weather as it is shown is the weather
-    /// for the next action: under a cloud that's still dry is safe, even if it
-    /// starts raining just as the robot gets there. Staying for an action
-    /// while it rains is getting wet.
+    /// Did the robot get rained on? What counts is the weather once it's
+    /// there, after its action: stepping under a cloud on its last tick of
+    /// rain is fine, as it's dry by the time the robot arrives, but stepping
+    /// under one just as it starts to rain, or staying while it does, is
+    /// getting wet.
     pub fn wet(&self) -> bool {
-        self.soaked
+        self.weather(self.pos).is_some_and(Weather::raining)
     }
 
-    /// What the rain cloud at `p` was doing during the last action, before
-    /// its tick. The game shows this while the action happens.
-    pub fn weather_before(&self, p: Pos) -> Option<Weather> {
-        self.weather_at(p, (self.clock + RAIN_CYCLE - 1) % RAIN_CYCLE)
+    /// What the rain cloud at `p` will be doing after the next action: the
+    /// weather the robot would find there. The game shows this between
+    /// actions, so a cloud that looks dry is safe to step under.
+    pub fn weather_next(&self, p: Pos) -> Option<Weather> {
+        let clock = if self.rainy() {
+            self.clock + 1
+        } else {
+            self.clock
+        };
+        self.weather_at(p, clock % RAIN_CYCLE)
     }
 
-    /// Every action takes a tick, and the rain clouds count down. Being under
-    /// one while it rains, for that tick, is getting wet. (Without
+    /// Are there any rain clouds?
+    pub fn rainy(&self) -> bool {
+        self.tiles.iter().any(|t| matches!(t, Tile::Rain(_)))
+    }
+
+    /// Every action takes a tick, and the rain clouds count down. (Without
     /// any, time doesn't matter, so it doesn't pass: the same place is the
     /// same place, for spotting a "while" that would never end.)
     fn tick(&mut self) {
-        self.soaked = self.weather(self.pos).is_some_and(Weather::raining);
-        if self.tiles.iter().any(|t| matches!(t, Tile::Rain(_))) {
+        if self.rainy() {
             self.clock = (self.clock + 1) % RAIN_CYCLE;
         }
     }
 
     /// Do one instruction. `Err` means the robot got stuck: it bumped into
-    /// something (or into rain), or swung the axe at something that isn't a
-    /// tree. If it ends up under rain that starts, it's `wet`.
+    /// something, or swung the axe at something that isn't a tree. If it
+    /// ends up under a cloud that's raining, it's `wet`.
     ///
     /// A bump has to stop the program, not just leave the robot where it is:
     /// otherwise walking into a wall on purpose lines the robot up, and some
@@ -1718,7 +1723,6 @@ impl World {
                 // something isn't a bump: that's how it stops.
                 while self.tile(self.pos) == Some(Tile::Ice)
                     && self.tile(step(self.pos)).is_some_and(Tile::passable)
-                    && !self.weather(step(self.pos)).is_some_and(Weather::raining)
                 {
                     self.pos = step(self.pos);
                 }
@@ -3028,10 +3032,6 @@ mod tests {
         assert_eq!(world.weather((1, 0)), Some(Weather::Dry(1)));
         world.act(Cmd::Sleep).unwrap();
         assert_eq!(world.weather((1, 0)), Some(Weather::Raining(2)));
-        assert!(
-            world.act(Cmd::Move(Dir::Right)).is_err(),
-            "can't drive into rain"
-        );
         world.act(Cmd::Sleep).unwrap();
         world.act(Cmd::Sleep).unwrap();
         assert_eq!(
@@ -3039,35 +3039,34 @@ mod tests {
             Some(Weather::Dry(3)),
             "and round again"
         );
-        // Onto it with 3 to go, and still dry after the step...
+        // Under it with 3 to go, and dry while it counts down...
         world.act(Cmd::Move(Dir::Right)).unwrap();
         assert!(!world.wet());
-        // ...and while it counts down...
-        world.act(Cmd::Sleep).unwrap();
         world.act(Cmd::Sleep).unwrap();
         assert!(!world.wet());
-        assert_eq!(world.weather((1, 0)), Some(Weather::Raining(2)));
-        // ...but staying while it rains is getting wet.
+        // ...but still there when it rains is getting wet.
         world.act(Cmd::Sleep).unwrap();
         assert!(world.wet());
     }
 
     #[test]
-    fn dry_is_safe_even_just_before_the_rain() {
-        // The cloud shows 1: stepping under it is fine, as it's dry for that
-        // step, and so is stepping out again as the rain starts.
-        let mut world = Level::parse(&level("test", &["R1.*"])).world();
+    fn what_counts_is_the_weather_on_arriving() {
+        // The cloud shows 1: one more dry tick, then two of rain.
+        let start = Level::parse(&level("test", &["R1.*"])).world();
+        // Under it just as the rain starts: wet. (It's shown beforehand as
+        // the weather the robot would arrive in.)
+        assert_eq!(start.weather_next((1, 0)), Some(Weather::Raining(2)));
+        let mut world = start.clone();
         world.act(Cmd::Move(Dir::Right)).unwrap();
-        assert!(!world.wet());
-        assert_eq!(world.weather_before((1, 0)), Some(Weather::Dry(1)));
-        assert_eq!(world.weather((1, 0)), Some(Weather::Raining(2)));
-        world.act(Cmd::Move(Dir::Right)).unwrap();
-        assert!(!world.wet());
-        // Staying is getting wet.
-        let mut world = Level::parse(&level("test", &["R1.*"])).world();
-        world.act(Cmd::Move(Dir::Right)).unwrap();
-        world.act(Cmd::Sleep).unwrap();
         assert!(world.wet());
+        // Under it on its last tick of rain: dry by the time it's there.
+        let mut world = start;
+        world.act(Cmd::Sleep).unwrap();
+        world.act(Cmd::Sleep).unwrap();
+        assert_eq!(world.weather((1, 0)), Some(Weather::Raining(1)));
+        assert_eq!(world.weather_next((1, 0)), Some(Weather::Dry(3)));
+        world.act(Cmd::Move(Dir::Right)).unwrap();
+        assert!(!world.wet());
     }
 
     #[test]
