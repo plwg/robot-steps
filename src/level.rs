@@ -143,6 +143,10 @@ pub enum Sense {
     Grass,
     /// The edge of the map: nothing there at all.
     Edge,
+    /// Rain: stepping there now would get the robot wet, as it'll be raining
+    /// when it gets there (so a cloud on its last drop isn't rain, and one
+    /// about to start is).
+    Rain,
     /// Anything the robot can't drive onto: a rock, a tree, a locked door it
     /// has no key for, or the edge of the map (but not rain, which passes).
     /// Not offered any more (it looks just like a rock); program text
@@ -155,7 +159,7 @@ pub enum Sense {
 
 impl Sense {
     /// Everything an "if" can look for, in the order it's offered.
-    pub const ALL: [Sense; 8] = [
+    pub const ALL: [Sense; 9] = [
         Sense::Tree,
         Sense::Rock,
         Sense::Star,
@@ -164,6 +168,7 @@ impl Sense {
         Sense::Door,
         Sense::Grass,
         Sense::Edge,
+        Sense::Rain,
     ];
 
     /// The sense with this letter in program text.
@@ -190,6 +195,7 @@ impl Sense {
             Sense::Door => 'd',
             Sense::Grass => 'g',
             Sense::Edge => 'e',
+            Sense::Rain => 'c',
             Sense::Wall => 'w',
             Sense::True => 'y',
         }
@@ -651,6 +657,7 @@ const STAR: &[Sense] = &[Sense::Star];
 const TREE_STAR: &[Sense] = &[Sense::Tree, Sense::Star];
 const ROCK: &[Sense] = &[Sense::Rock];
 const GRASS: &[Sense] = &[Sense::Grass];
+const RAIN: &[Sense] = &[Sense::Rain];
 
 pub struct LevelDef {
     /// What the save files call this level. It never changes, wherever the
@@ -1294,6 +1301,17 @@ pub const CHAPTERS: &[Chapter] = &[
             // The same sleep each time: a loop.
             level("rain-7", &["R1.1.1.1.*"]).with_sleep(2).with_loops(2),
             level("rain-8", &["R.2.2.2.2*"]).with_sleep(3).with_loops(3),
+            // Wait while it's raining: "always { if there's rain to the right
+            // { sleep } otherwise { go right } }". Each cloud needs a different
+            // wait (one none at all), and there are no counts, so one rule for
+            // every cloud is the only way to fit.
+            level("rain-while", &["R.2.3.2.1.*"])
+                .with_ifs(4, RAIN)
+                .with_else()
+                .with_not()
+                .with_while(4, &[])
+                .with_sleep(4)
+                .only_while(),
         ],
     },
     // Every block so far.
@@ -1605,6 +1623,12 @@ impl World {
             Sense::Door => matches!(self.tile(next), Some(Tile::Door | Tile::Open)),
             Sense::Grass => matches!(self.tile(next), Some(Tile::Grass | Tile::Stump)),
             Sense::Edge => self.tile(next).is_none(),
+            Sense::Rain => {
+                self.rainy()
+                    && self
+                        .weather_at(next, (self.clock + 1) % RAIN_CYCLE)
+                        .is_some_and(Weather::raining)
+            }
             Sense::True => true,
             // Rain passes, so it isn't a wall.
             Sense::Wall => match self.tile(next) {
@@ -1632,10 +1656,14 @@ impl World {
 
     /// What the rain cloud at `p` is doing, if there's one there.
     pub fn weather(&self, p: Pos) -> Option<Weather> {
+        self.weather_at(p, self.clock)
+    }
+
+    fn weather_at(&self, p: Pos, clock: u8) -> Option<Weather> {
         let Some(Tile::Rain(start)) = self.tile(p) else {
             return None;
         };
-        let phase = (RAIN_DRY - start + self.clock) % RAIN_CYCLE;
+        let phase = (RAIN_DRY - start + clock) % RAIN_CYCLE;
         Some(if phase < RAIN_DRY {
             Weather::Dry(RAIN_DRY - phase)
         } else {
@@ -1786,6 +1814,7 @@ mod tests {
         ("75", "<!tD D ] cD <!tD D ]"),
         ("break-1", "<y R {gD B } ] D D <y L ]"),
         ("break-2", "<y D {gR B } ] R R <y D ]"),
+        ("rain-while", "<y {cR Z / R } ]"),
     ];
 
     /// Known solutions for the function levels: the main strip, then each
@@ -2048,8 +2077,10 @@ mod tests {
             if level.sleep && dir == Dir::Up {
                 cmds.push(Cmd::Sleep);
             }
+            // Counts only where the level has them.
+            let most = if level.repeat { MAX_TIMES } else { 1 };
             for cmd in cmds {
-                for times in 1..=MAX_TIMES {
+                for times in 1..=most {
                     blocks.push(vec![Item::Block(Block { cmd, times })]);
                 }
             }
@@ -2133,6 +2164,7 @@ mod tests {
                     }
                 }
                 match open {
+                    None if !self.level.loops => false,
                     None => self.try_item(items, Item::LoopStart { times: 1 }, Some(items.len())),
                     // Close the loop. A loop round one block is just repeat,
                     // so loops hold at least two.
@@ -2398,8 +2430,12 @@ mod tests {
 
     #[test]
     fn while_levels_need_what_they_look_for() {
-        // Break levels need an "if" too, which this search doesn't try.
-        for level in numbered().iter().filter(|l| l.whiles && !l.breaks) {
+        // Break levels need an "if" too, which this search doesn't try, and
+        // so do rain levels (it doesn't try sleep either).
+        for level in numbered()
+            .iter()
+            .filter(|l| l.whiles && !l.breaks && !l.sleep)
+        {
             let nots: &[bool] = if level.while_not {
                 &[false, true]
             } else {

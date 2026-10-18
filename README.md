@@ -16,7 +16,7 @@ stars. There's no reading required.
 
 ## What it teaches
 
-Across 108 levels in 18 chapters, numbered within each chapter (`3-2`), it
+Across 109 levels in 18 chapters, numbered within each chapter (`3-2`), it
 introduces the ideas of programming in the order they're usually taught,
 each as something a robot on a map can do.
 
@@ -35,7 +35,7 @@ each as something a robot on a map can do.
 | `while true` and `break` | "While true" (a tick) goes round until a break (a doorway with an arrow going out) leaves the loop | 13 Break |
 | Functions | Strips named ● and ▲ that the main program calls | 14 Functions, 15 Functions + if |
 | Parameters | Call ● with a number, and use "●'s number" as a count inside it | 16 Function numbers |
-| Timing | Rain clouds rain on a cycle: sleep, or hurry | 17 Rain |
+| Timing | Rain clouds rain on a cycle: sleep, or hurry, or look for rain and wait while it's there | 17 Rain |
 | Infinite loops | A "while" that would never end stops and shakes red | 12 While |
 | Tracing a program | The slider along the top runs it ahead of time, step by step | Throughout |
 | Debugging | The step that went wrong shakes red; blocks can be put in or taken out anywhere | Throughout |
@@ -59,9 +59,10 @@ each as something a robot on a map can do.
    all trees, all grass, or a mix), so the robot has to look before it
    chops. The clouds are tricky: if there's a way to turn out that beats
    the program, that's the way they go, so a program that only works when
-   it's lucky never wins. Tap "if", pick what to look for (shown as map tiles: a tree, rock,
-   star, ice, key, door, grass, or the edge of the map, whichever the level
-   offers), then which way. The blocks to run go inside its brackets
+   it's lucky never wins. Tap "if", pick what to look for (shown as map
+   tiles: a tree, rock, star, ice, key, door, grass, rain, or the edge of
+   the map, whichever the level offers), then which way. The blocks to run
+   go inside its brackets
 8. **Loops:** repeat a whole group of blocks
 9. **If inside loops:** "if there's a tree to the right { chop it }" or "if
    there's a star above { fetch it }" in a loop: one rule handles whatever
@@ -91,7 +92,11 @@ each as something a robot on a map can do.
     under a cloud on its last drop is safe (it's dry by the time the robot
     gets there), but stepping under one on its last dry dot isn't (it starts to rain
     as the robot arrives). Sleep (the sleep block, Zzz) until it's dry, or
-    hurry across before it rains
+    hurry across before it rains. The last level has no counts: "always
+    { if there's rain to the right { sleep } otherwise { go right } }"
+    waits the right time at every cloud. Looking for rain means "stepping
+    there would get wet", so a cloud about to start counts, and one on its
+    last drop doesn't
 18. **All together**
 
 Each new block is first shown in a demo level (▶ on the map): the program is

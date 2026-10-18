@@ -270,7 +270,8 @@ impl CustomMap {
                 Sense::Door => on_map('D'),
                 Sense::Star | Sense::Grass | Sense::Edge => true,
                 Sense::True => with_true,
-                Sense::Wall => false,
+                // Not offered in the map maker (yet).
+                Sense::Wall | Sense::Rain => false,
             })
             .collect()
     }

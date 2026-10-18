@@ -2666,6 +2666,7 @@ impl Game {
                         Sense::Door => "a door",
                         Sense::Grass => "grass",
                         Sense::Edge => "the edge",
+                        Sense::Rain => "rain",
                         Sense::Wall => "a wall",
                         Sense::True => return "Always (true)".to_string(),
                     }
@@ -4602,6 +4603,16 @@ pub fn draw_sense(c: Vec2, size: f32, sense: Sense) {
                 3.5 * k,
                 WHITE,
             );
+        }
+        // A rain cloud, raining.
+        Sense::Rain => {
+            for dx in [-0.22, 0.0, 0.22] {
+                let x = c.x + dx * size;
+                let y = c.y + size * 0.08;
+                let (dx, dy) = (-size * 0.05, size * 0.22);
+                draw_line(x, y, x + dx, y + dy, size * 0.07, RAIN_BLUE);
+            }
+            draw_puff_in(c - vec2(0.0, size * 0.1), size * 0.85, RAIN_CLOUD);
         }
         // The edge of the map: grass that stops, and nothing beyond.
         Sense::Edge => {
